@@ -11,6 +11,12 @@ config :wfe,
   ecto_repos: [Wfe.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :wfe, :generators, binary_id: true
+
+config :wfe, Wfe.Repo,
+  migration_primary_key: [type: :binary_id],
+  migration_foreign_key: [type: :binary_id]
+
 # Configure the endpoint
 config :wfe, WfeWeb.Endpoint,
   url: [host: "localhost"],
