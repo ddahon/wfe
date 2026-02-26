@@ -10,16 +10,14 @@ defmodule Wfe.Application do
     children = [
       WfeWeb.Telemetry,
       Wfe.Repo,
+      {Oban, Application.fetch_env!(:wfe, Oban)},
+      Wfe.Scrapers.CircuitBreaker,
       {DNSCluster, query: Application.get_env(:wfe, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Wfe.PubSub},
-      # Start a worker by calling: Wfe.Worker.start_link(arg)
-      # {Wfe.Worker, arg},
-      # Start to serve requests, typically the last entry
+      {Finch, name: Wfe.Finch},
       WfeWeb.Endpoint
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Wfe.Supervisor]
     Supervisor.start_link(children, opts)
   end

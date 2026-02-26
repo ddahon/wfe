@@ -20,6 +20,8 @@ config :wfe, WfeWeb.Endpoint,
 # In test we don't send emails
 config :wfe, Wfe.Mailer, adapter: Swoosh.Adapters.Test
 
+config :wfe, Oban, testing: :manual
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

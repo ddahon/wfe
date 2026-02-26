@@ -37,6 +37,26 @@ config :wfe, WfeWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :wfe, Wfe.Mailer, adapter: Swoosh.Adapters.Local
 
+config :wfe, Oban,
+  # Required for SQLite
+  engine: Oban.Engines.Lite,
+  repo: Wfe.Repo,
+  queues: [
+    default: 5,
+    # One job at a time per ATS
+    greenhouse: 1,
+    lever: 1,
+    ashby: 1
+  ],
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron,
+     crontab: [
+       # Run orchestrator every 6 hours
+       {"0 */6 * * *", Wfe.Workers.ScrapeOrchestrator}
+     ]}
+  ]
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
