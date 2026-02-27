@@ -37,6 +37,15 @@ config :wfe, WfeWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :wfe, Wfe.Mailer, adapter: Swoosh.Adapters.Local
 
+config :wfe, :companies_finder,
+  # Run every 24 hours
+  interval: :timer.hours(24),
+  # Don't run on application start (set to true for production)
+  run_on_start: false
+
+# config/prod.exs
+config :wfe, :companies_finder, run_on_start: true
+
 config :wfe, Oban,
   # Required for SQLite
   engine: Oban.Engines.Lite,

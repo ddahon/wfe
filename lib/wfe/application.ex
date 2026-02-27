@@ -15,7 +15,8 @@ defmodule Wfe.Application do
       {DNSCluster, query: Application.get_env(:wfe, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Wfe.PubSub},
       {Finch, name: Wfe.Finch},
-      WfeWeb.Endpoint
+      WfeWeb.Endpoint,
+      {Wfe.CompaniesFinder.Supervisor, []}
     ]
 
     opts = [strategy: :one_for_one, name: Wfe.Supervisor]

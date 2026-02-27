@@ -9,7 +9,5 @@ defmodule Wfe.Repo.Migrations.CreateCompanies do
 
       timestamps(type: :utc_datetime)
     end
-
-    create unique_index(:companies, [:name])
   end
 end
