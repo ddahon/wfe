@@ -7,9 +7,21 @@ defmodule Wfe.Scrapers.CircuitBreaker do
   use GenServer
   require Logger
 
+  alias Wfe.Companies.Company
+
   @threshold 3
   @cooldown_ms :timer.minutes(15)
-  @queues ~w(greenhouse lever ashby)a
+  @queues (for ats <- Company.valid_ats(), do: String.to_atom(ats))
+
+  defp queue_for_ats(ats) when is_binary(ats) do
+    if ats in Company.valid_ats() do
+      String.to_atom(ats)
+    else
+      raise "Unknown ATS for circuit breaker: #{inspect(ats)}. Add to Company.valid_ats and Oban queues."
+    end
+  end
+
+  defp queue_for_ats(ats) when is_atom(ats), do: ats
 
   # --- Client ---
 
@@ -41,7 +53,7 @@ defmodule Wfe.Scrapers.CircuitBreaker do
         "[CircuitBreaker] #{ats}: #{failures} consecutive failures — pausing queue for #{div(@cooldown_ms, 60_000)}min"
       )
 
-      Oban.pause_queue(queue: String.to_existing_atom(ats))
+      Oban.pause_queue(queue: queue_for_ats(ats))
       Process.send_after(self(), {:resume, ats}, @cooldown_ms)
       {:noreply, Map.delete(state, ats)}
     else
@@ -53,7 +65,7 @@ defmodule Wfe.Scrapers.CircuitBreaker do
   @impl true
   def handle_info({:resume, ats}, state) do
     Logger.info("[CircuitBreaker] #{ats}: cooldown over — resuming queue")
-    Oban.resume_queue(queue: String.to_existing_atom(ats))
+    Oban.resume_queue(queue: queue_for_ats(ats))
     {:noreply, state}
   end
 

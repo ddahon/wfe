@@ -3,7 +3,7 @@ defmodule Wfe.Companies do
   alias Wfe.Repo
   alias Wfe.Companies.Company
 
-  @valid_ats ~w(greenhouse lever ashby)
+  @valid_ats Company.valid_ats()
   @stale_after_hours 6
 
   def get_company!(id), do: Repo.get!(Company, id)

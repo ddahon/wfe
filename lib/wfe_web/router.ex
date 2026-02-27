@@ -37,7 +37,9 @@ defmodule WfeWeb.Router do
     scope "/dev" do
       pipe_through :browser
 
-      live_dashboard "/dashboard", metrics: WfeWeb.Telemetry
+      live_dashboard "/dashboard",
+        metrics: WfeWeb.Telemetry,
+        additional_pages: [oban: Oban.LiveDashboard]
       forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end

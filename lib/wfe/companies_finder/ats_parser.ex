@@ -6,6 +6,8 @@ defmodule Wfe.CompaniesFinder.ATSParser do
     * Ashby: jobs.ashbyhq.com/{company}
     * Greenhouse: boards.greenhouse.io/{company}
     * Lever: jobs.lever.co/{company}
+    * Workable: apply.workable.com/{company}
+    * Recruitee: {company}.recruitee.com
   """
 
   @type parsed_company :: %{
@@ -33,6 +35,18 @@ defmodule Wfe.CompaniesFinder.ATSParser do
       url_patterns: [
         ~r{^https?://jobs\.lever\.co/([a-zA-Z0-9][-a-zA-Z0-9]*[a-zA-Z0-9]|[a-zA-Z0-9])(?:/|$|\?)}i
       ]
+    },
+    "workable" => %{
+      cdx_pattern: "apply.workable.com/*",
+      url_patterns: [
+        ~r{^https?://apply\.workable\.com/([a-zA-Z0-9][-a-zA-Z0-9]*[a-zA-Z0-9]|[a-zA-Z0-9])(?:/|$|\?)}i
+      ]
+    },
+    "recruitee" => %{
+      cdx_pattern: "*.recruitee.com/*",
+      url_patterns: [
+        ~r{^https?://([a-zA-Z0-9][-a-zA-Z0-9]*[a-zA-Z0-9]|[a-zA-Z0-9])\.recruitee\.com(?:/|$|\?)}i
+      ]
     }
   }
 
@@ -48,6 +62,7 @@ defmodule Wfe.CompaniesFinder.ATSParser do
     health healthcheck ping status
     v1 v2 v3 api-docs docs documentation
     widget widgets iframe iframes
+    app help support blog career
   ))
 
   @doc """

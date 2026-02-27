@@ -17,10 +17,14 @@ defmodule Wfe.Companies.Company do
     timestamps(type: :utc_datetime)
   end
 
+  @valid_ats ~w(greenhouse lever ashby workable recruitee)
+
+  def valid_ats, do: @valid_ats
+
   def changeset(company, attrs) do
     company
     |> cast(attrs, [:name, :ats, :ats_identifier, :scrape_status, :scrape_error, :last_scraped_at])
     |> validate_required([:name])
-    |> validate_inclusion(:ats, ~w(greenhouse lever ashby), allow_nil: true)
+    |> validate_inclusion(:ats, @valid_ats, allow_nil: true)
   end
 end

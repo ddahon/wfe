@@ -6,9 +6,22 @@ defmodule Wfe.Workers.ScrapeOrchestrator do
   use Oban.Worker, queue: :default, max_attempts: 1
 
   alias Wfe.Companies
+  alias Wfe.Companies.Company
   alias Wfe.Workers.ScrapeCompanyWorker
 
   require Logger
+
+  # Only create queue atoms for known ATS (whitelist) to avoid to_existing_atom failures
+  # and unbounded atom creation. Uses Company.valid_ats/0 as single source of truth.
+  defp queue_for_ats(ats) do
+    if ats in Company.valid_ats() do
+      String.to_atom(ats)
+    else
+      raise "Unknown ATS for queue: #{inspect(ats)}. Add to Company.valid_ats and Oban queues."
+    end
+  end
+
+  @insert_batch_size 500
 
   @impl Oban.Worker
   def perform(_job) do
@@ -17,12 +30,15 @@ defmodule Wfe.Workers.ScrapeOrchestrator do
 
     candidates
     |> Enum.map(fn company ->
+      queue = queue_for_ats(company.ats)
+
       ScrapeCompanyWorker.new(
         %{company_id: company.id},
-        queue: String.to_existing_atom(company.ats)
+        queue: queue
       )
     end)
-    |> Oban.insert_all()
+    |> Enum.chunk_every(@insert_batch_size)
+    |> Enum.each(&Oban.insert_all/1)
 
     :ok
   end

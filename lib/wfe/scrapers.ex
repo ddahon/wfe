@@ -2,7 +2,9 @@ defmodule Wfe.Scrapers do
   @scrapers %{
     "greenhouse" => Wfe.Scrapers.Greenhouse,
     "lever" => Wfe.Scrapers.Lever,
-    "ashby" => Wfe.Scrapers.Ashby
+    "ashby" => Wfe.Scrapers.Ashby,
+    "workable" => Wfe.Scrapers.Workable,
+    "recruitee" => Wfe.Scrapers.Recruitee
   }
 
   def supported_ats, do: Map.keys(@scrapers)

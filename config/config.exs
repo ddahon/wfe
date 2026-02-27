@@ -43,9 +43,6 @@ config :wfe, :companies_finder,
   # Don't run on application start (set to true for production)
   run_on_start: false
 
-# config/prod.exs
-config :wfe, :companies_finder, run_on_start: true
-
 config :wfe, Oban,
   # Required for SQLite
   engine: Oban.Engines.Lite,
@@ -55,7 +52,9 @@ config :wfe, Oban,
     # One job at a time per ATS
     greenhouse: 1,
     lever: 1,
-    ashby: 1
+    ashby: 1,
+    workable: 1,
+    recruitee: 1
   ],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
