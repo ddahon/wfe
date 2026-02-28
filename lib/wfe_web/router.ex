@@ -17,7 +17,7 @@ defmodule WfeWeb.Router do
   scope "/", WfeWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", JobSearchLive, :index
   end
 
   # Other scopes may use custom stacks.
