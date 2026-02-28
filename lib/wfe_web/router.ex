@@ -40,7 +40,12 @@ defmodule WfeWeb.Router do
       live_dashboard "/dashboard",
         metrics: WfeWeb.Telemetry,
         additional_pages: [oban: Oban.LiveDashboard]
+
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+
+      scope "/scraping", Wfe.ScrapingDashboard do
+        live "/dashboard", ScrapingDashboardLive, :index
+      end
     end
   end
 end
