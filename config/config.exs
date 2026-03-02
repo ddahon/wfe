@@ -43,25 +43,21 @@ config :wfe, :companies_finder,
   # Don't run on application start (set to true for production)
   run_on_start: false
 
+# Per-ATS queues (concurrency 1 = serial calls per ATS = rate limiter).
+# Must match Company.valid_ats/0; ConfigCheck.validate!() at boot catches mismatches.
+ats_queues = [greenhouse: 1, lever: 1, ashby: 1, workable: 1, recruitee: 1]
+
 config :wfe, Oban,
   # Required for SQLite
   engine: Oban.Engines.Lite,
   repo: Wfe.Repo,
-  queues: [
-    default: 5,
-    # One job at a time per ATS
-    greenhouse: 1,
-    lever: 1,
-    ashby: 1,
-    workable: 1,
-    recruitee: 1
-  ],
+  queues: [default: 5] ++ ats_queues,
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     {Oban.Plugins.Cron,
      crontab: [
-       # Run orchestrator every 6 hours
-       {"0 */6 * * *", Wfe.Workers.ScrapeOrchestrator}
+       # Run orchestrator every 24 hours
+       {"0 */24 * * *", Wfe.Workers.ScrapeOrchestrator}
      ]}
   ]
 

@@ -7,6 +7,9 @@ defmodule Wfe.Application do
 
   @impl true
   def start(_type, _args) do
+    # Fail fast if ATS list, scraper modules, and Oban queues are misaligned.
+    Wfe.Scrapers.ConfigCheck.validate!()
+
     children = [
       WfeWeb.Telemetry,
       Wfe.Repo,
@@ -20,7 +23,12 @@ defmodule Wfe.Application do
     ]
 
     opts = [strategy: :one_for_one, name: Wfe.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    # Attach after the supervision tree so Oban's own handlers are in place.
+    Wfe.Workers.ScrapeTelemetry.attach()
+
+    result
   end
 
   # Tell Phoenix to update the endpoint configuration

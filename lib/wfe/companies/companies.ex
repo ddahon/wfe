@@ -4,53 +4,42 @@ defmodule Wfe.Companies do
   alias Wfe.Companies.Company
 
   @valid_ats Company.valid_ats()
-  @stale_after_hours 6
 
   def get_company!(id), do: Repo.get!(Company, id)
 
+  @doc "Non-bang variant; telemetry handlers must not crash."
+  def get_company(id), do: Repo.get(Company, id)
+
   @doc """
-  Returns companies that need scraping:
-  - Never scraped, OR
-  - Failed last time, OR
-  - Stuck in progress (crash recovery), OR
-  - Successfully scraped but stale
+  Companies due for a scrape.
+
+  No longer filters by scrape_status — Oban's unique constraint
+  already prevents duplicate in-flight jobs. Select purely on staleness.
   """
   def list_scrape_candidates do
-    cutoff = DateTime.utc_now() |> DateTime.add(-@stale_after_hours, :hour)
+    threshold = DateTime.add(DateTime.utc_now(), -6, :hour)
 
     Company
     |> where([c], c.ats in @valid_ats and not is_nil(c.ats_identifier))
-    |> where(
-      [c],
-      c.scrape_status != "completed" or
-        is_nil(c.last_scraped_at) or
-        c.last_scraped_at < ^cutoff
-    )
+    |> where([c], is_nil(c.last_scraped_at) or c.last_scraped_at < ^threshold)
     |> Repo.all()
   end
 
-  def mark_scrape_in_progress(company) do
-    update_company(company, %{scrape_status: "in_progress", scrape_error: nil})
+  @doc "Record a successful scrape: stamp time, clear any prior error."
+  def touch_last_scraped(%Company{} = company) do
+    company
+    |> Ecto.Changeset.change(
+      last_scraped_at: DateTime.utc_now() |> DateTime.truncate(:second),
+      last_scrape_error: nil
+    )
+    |> Repo.update()
   end
 
-  def mark_scrape_complete(company) do
-    update_company(company, %{
-      scrape_status: "completed",
-      scrape_error: nil,
-      last_scraped_at: DateTime.utc_now() |> DateTime.truncate(:second)
-    })
-  end
-
+  @doc "Record final failure after all retries (called from telemetry handler)."
   def mark_scrape_failed(company, reason) do
     update_company(company, %{
-      scrape_status: "failed",
-      scrape_error: reason |> to_string() |> String.slice(0, 255)
+      last_scrape_error: reason |> to_string() |> String.slice(0, 255)
     })
-  end
-
-  @doc "Reset everything — useful for forcing a full re-scrape."
-  def reset_scrape_status do
-    Repo.update_all(Company, set: [scrape_status: "pending", scrape_error: nil])
   end
 
   defp update_company(company, attrs) do

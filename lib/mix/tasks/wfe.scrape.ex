@@ -1,21 +1,26 @@
 defmodule Mix.Tasks.Wfe.Scrape do
-  @moduledoc "Manually trigger a full scrape. Usage: mix wfe.scrape [--reset]"
+  @shortdoc "Manually trigger a full scrape"
+
+  @moduledoc """
+  Enqueues the scrape orchestrator.
+
+      mix wfe.scrape
+
+  If a previous run appears stuck, cancel its jobs directly:
+
+      iex> Oban.cancel_all_jobs(Oban.Job |> where(worker: "Wfe.Workers.ScrapeCompanyWorker"))
+  """
   use Mix.Task
 
   @impl Mix.Task
-  def run(args) do
+  def run(_args) do
     Mix.Task.run("app.start")
 
-    if "--reset" in args do
-      Wfe.Companies.reset_scrape_status()
-      Mix.shell().info("Reset all company scrape statuses.")
-    end
-
     {:ok, job} =
-      Wfe.Workers.ScrapeOrchestrator.new(%{})
+      %{}
+      |> Wfe.Workers.ScrapeOrchestrator.new()
       |> Oban.insert()
 
     Mix.shell().info("Orchestrator enqueued (job ##{job.id}).")
-    Mix.shell().info("Watch progress with: Oban.check_queue(queue: :greenhouse) etc.")
   end
 end

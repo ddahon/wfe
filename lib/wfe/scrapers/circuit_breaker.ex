@@ -11,7 +11,7 @@ defmodule Wfe.Scrapers.CircuitBreaker do
 
   @threshold 3
   @cooldown_ms :timer.minutes(15)
-  @queues (for ats <- Company.valid_ats(), do: String.to_atom(ats))
+  @queues for ats <- Company.valid_ats(), do: String.to_atom(ats)
 
   defp queue_for_ats(ats) when is_binary(ats) do
     if ats in Company.valid_ats() do

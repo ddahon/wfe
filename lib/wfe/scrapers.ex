@@ -28,8 +28,8 @@ defmodule Wfe.Scrapers do
   def fetch_jobs(%{ats: ats} = company) do
     case Map.fetch(@scrapers, ats) do
       {:ok, mod} ->
-        with {:ok, jobs} <- mod.fetch_jobs(company) do
-          {:ok, filter_remote(mod, company, jobs)}
+        with {:ok, pairs} <- mod.fetch_jobs(company) do
+          {:ok, filter_remote(mod, company, pairs)}
         end
 
       :error ->
@@ -39,38 +39,36 @@ defmodule Wfe.Scrapers do
 
   # --- Filtering ------------------------------------------------------------
 
-  # Scrapers now return `{raw, parsed}` tuples so we can consult raw
-  # ATS fields for remote hints before falling back to text heuristics.
-  defp filter_remote(mod, company, raw_parsed_pairs) do
-    total = length(raw_parsed_pairs)
+  # Scrapers return `{raw, parsed}` tuples so we can consult raw ATS
+  # fields for structured remote hints before resorting to text heuristics.
+  defp filter_remote(mod, company, pairs) do
+    # Bucket by hint result: true (keep), false (drop), nil (undecided).
+    by_hint =
+      Enum.group_by(pairs, fn {raw, _parsed} -> apply_hint(mod, raw) end)
 
-    {definite_keep, unknown} =
-      Enum.reduce(raw_parsed_pairs, {[], []}, fn {raw, parsed}, {keep, unk} ->
-        case apply_hint(mod, raw) do
-          true -> {[parsed | keep], unk}
-          false -> {keep, unk}
-          nil -> {keep, [parsed | unk]}
-        end
-      end)
+    definite = parsed_for(by_hint, true)
+    _dropped = parsed_for(by_hint, false)
+    unknown = parsed_for(by_hint, nil)
 
-    heuristic_keep = RemoteFilter.apply(unknown)
-    kept = definite_keep ++ heuristic_keep
+    heuristic = RemoteFilter.apply(unknown)
+    kept = definite ++ heuristic
 
-    Logger.debug(
-      "[Scrapers] #{company.name}: #{total} fetched → " <>
-        "#{length(definite_keep)} ATS-flagged remote, " <>
-        "#{length(heuristic_keep)}/#{length(unknown)} passed heuristics, " <>
-        "#{length(kept)} kept"
-    )
+    Logger.debug("""
+    [Scrapers] #{company.name}: #{length(pairs)} fetched
+      #{length(definite)} ATS-flagged remote
+      #{length(parsed_for(by_hint, false))} ATS-flagged on-site
+      #{length(heuristic)}/#{length(unknown)} passed heuristics
+      #{length(kept)} kept
+    """)
 
     kept
   end
 
+  defp parsed_for(groups, key) do
+    groups |> Map.get(key, []) |> Enum.map(&elem(&1, 1))
+  end
+
   defp apply_hint(mod, raw) do
-    if function_exported?(mod, :remote_hint, 1) do
-      mod.remote_hint(raw)
-    else
-      nil
-    end
+    if function_exported?(mod, :remote_hint, 1), do: mod.remote_hint(raw), else: nil
   end
 end

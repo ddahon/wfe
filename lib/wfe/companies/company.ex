@@ -8,8 +8,7 @@ defmodule Wfe.Companies.Company do
     field :name, :string
     field :ats, :string
     field :ats_identifier, :string
-    field :scrape_status, :string, default: "pending"
-    field :scrape_error, :string
+    field :last_scrape_error, :string
     field :last_scraped_at, :utc_datetime
 
     has_many :jobs, Wfe.Jobs.Job
@@ -23,7 +22,7 @@ defmodule Wfe.Companies.Company do
 
   def changeset(company, attrs) do
     company
-    |> cast(attrs, [:name, :ats, :ats_identifier, :scrape_status, :scrape_error, :last_scraped_at])
+    |> cast(attrs, [:name, :ats, :ats_identifier, :last_scrape_error, :last_scraped_at])
     |> validate_required([:name])
     |> validate_inclusion(:ats, @valid_ats, allow_nil: true)
   end

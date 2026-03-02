@@ -315,35 +315,19 @@ defmodule WfeWeb.JobSearchLive do
             <dt class="font-medium text-zinc-500">Identifier</dt>
             <dd class="text-zinc-900">{@company.ats_identifier}</dd>
           </div>
-          <div>
-            <dt class="font-medium text-zinc-500">Scrape Status</dt>
-            <dd>
-              <span class={[
-                "inline-block rounded px-2 py-0.5 text-xs",
-                status_badge_class(@company.scrape_status)
-              ]}>
-                {@company.scrape_status}
-              </span>
-            </dd>
-          </div>
           <div :if={@company.last_scraped_at}>
             <dt class="font-medium text-zinc-500">Last Scraped</dt>
             <dd class="text-zinc-900">
               {Calendar.strftime(@company.last_scraped_at, "%b %d, %Y at %H:%M UTC")}
             </dd>
           </div>
-          <div :if={@company.scrape_error}>
+          <div :if={@company.last_scrape_error}>
             <dt class="font-medium text-zinc-500">Last Error</dt>
-            <dd class="text-red-600 break-words">{@company.scrape_error}</dd>
+            <dd class="text-red-600 break-words">{@company.last_scrape_error}</dd>
           </div>
         </dl>
       </div>
     </div>
     """
   end
-
-  defp status_badge_class("completed"), do: "bg-green-100 text-green-800"
-  defp status_badge_class("failed"), do: "bg-red-100 text-red-800"
-  defp status_badge_class("in_progress"), do: "bg-blue-100 text-blue-800"
-  defp status_badge_class(_), do: "bg-zinc-100 text-zinc-800"
 end

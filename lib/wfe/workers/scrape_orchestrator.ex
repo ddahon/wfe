@@ -1,41 +1,33 @@
 defmodule Wfe.Workers.ScrapeOrchestrator do
   @moduledoc """
-  Finds companies needing a scrape and enqueues one worker per company
-  into the ATS-specific queue.
+  Finds companies needing a scrape and enqueues one ScrapeCompanyWorker
+  per company into its ATS-specific queue.
   """
   use Oban.Worker, queue: :default, max_attempts: 1
 
   alias Wfe.Companies
-  alias Wfe.Companies.Company
   alias Wfe.Workers.ScrapeCompanyWorker
 
   require Logger
 
-  defp queue_for_ats(ats) do
-    if ats in Company.valid_ats() do
-      String.to_atom(ats)
-    else
-      raise "Unknown ATS for queue: #{inspect(ats)}. Add to Company.valid_ats and Oban queues."
-    end
-  end
-
-  @impl Oban.Worker
+  @impl true
   def perform(_job) do
     candidates = Companies.list_scrape_candidates()
     Logger.info("[Orchestrator] Found #{length(candidates)} candidates")
 
-    # Oban.insert_all bypasses :unique checks. Use insert/1 so the worker's
-    # `unique` option actually dedupes in-flight jobs for the same company.
+    # Oban.insert_all/1 bypasses :unique; insert/1 respects it.
     {inserted, dupes} =
       Enum.reduce(candidates, {0, 0}, fn company, {ins, dup} ->
-        result =
-          %{company_id: company.id}
-          |> ScrapeCompanyWorker.new(queue: queue_for_ats(company.ats))
-          |> Oban.insert()
+        %{"company_id" => company.id}
+        |> ScrapeCompanyWorker.new(queue: String.to_existing_atom(company.ats))
+        |> Oban.insert()
+        |> case do
+          {:ok, %Oban.Job{conflict?: true}} ->
+            {ins, dup + 1}
 
-        case result do
-          {:ok, %Oban.Job{conflict?: true}} -> {ins, dup + 1}
-          {:ok, _} -> {ins + 1, dup}
+          {:ok, _job} ->
+            {ins + 1, dup}
+
           {:error, reason} ->
             Logger.warning("[Orchestrator] insert failed for #{company.id}: #{inspect(reason)}")
             {ins, dup}

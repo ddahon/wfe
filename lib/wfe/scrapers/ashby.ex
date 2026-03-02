@@ -22,7 +22,8 @@ defmodule Wfe.Scrapers.Ashby do
 
   @impl true
   # Ashby has an explicit boolean — trust it.
-  def remote_hint(%{"isRemote" => true}), do: true # TODO: wtf is this?
+  # TODO: wtf is this?
+  def remote_hint(%{"isRemote" => true}), do: true
   def remote_hint(%{"isRemote" => false}), do: false
   def remote_hint(_), do: nil
 
