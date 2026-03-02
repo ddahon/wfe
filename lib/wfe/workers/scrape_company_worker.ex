@@ -5,8 +5,12 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
   """
   use Oban.Worker,
     max_attempts: 3,
-    # Don't enqueue duplicates within 10 minutes
-    unique: [period: 600, fields: [:args, :queue], states: [:available, :scheduled, :executing]]
+    # Dedupe on args+queue while job is pending/running/retrying.
+    unique: [
+      period: 600,
+      fields: [:args, :queue],
+      states: [:available, :scheduled, :executing, :retryable]
+    ]
 
   alias Wfe.{Companies, Jobs, Scrapers}
   alias Wfe.Scrapers.CircuitBreaker
@@ -26,7 +30,6 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
         Logger.info("[Scraper] #{company.name}: upserted #{count} jobs")
         Companies.mark_scrape_complete(company)
         CircuitBreaker.record_success(company.ats)
-        # Small courtesy delay since queue concurrency = 1 anyway
         Process.sleep(500)
         :ok
 
@@ -34,7 +37,6 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
         Logger.warning("[Scraper] #{company.name} failed: #{inspect(reason)}")
         CircuitBreaker.record_failure(company.ats)
 
-        # Only mark DB as failed on final attempt (Oban will retry otherwise)
         if attempt >= max do
           Companies.mark_scrape_failed(company, inspect(reason))
         end

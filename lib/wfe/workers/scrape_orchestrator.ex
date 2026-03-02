@@ -11,8 +11,6 @@ defmodule Wfe.Workers.ScrapeOrchestrator do
 
   require Logger
 
-  # Only create queue atoms for known ATS (whitelist) to avoid to_existing_atom failures
-  # and unbounded atom creation. Uses Company.valid_ats/0 as single source of truth.
   defp queue_for_ats(ats) do
     if ats in Company.valid_ats() do
       String.to_atom(ats)
@@ -21,25 +19,30 @@ defmodule Wfe.Workers.ScrapeOrchestrator do
     end
   end
 
-  @insert_batch_size 500
-
   @impl Oban.Worker
   def perform(_job) do
     candidates = Companies.list_scrape_candidates()
-    Logger.info("[Orchestrator] Enqueuing #{length(candidates)} companies")
+    Logger.info("[Orchestrator] Found #{length(candidates)} candidates")
 
-    candidates
-    |> Enum.map(fn company ->
-      queue = queue_for_ats(company.ats)
+    # Oban.insert_all bypasses :unique checks. Use insert/1 so the worker's
+    # `unique` option actually dedupes in-flight jobs for the same company.
+    {inserted, dupes} =
+      Enum.reduce(candidates, {0, 0}, fn company, {ins, dup} ->
+        result =
+          %{company_id: company.id}
+          |> ScrapeCompanyWorker.new(queue: queue_for_ats(company.ats))
+          |> Oban.insert()
 
-      ScrapeCompanyWorker.new(
-        %{company_id: company.id},
-        queue: queue
-      )
-    end)
-    |> Enum.chunk_every(@insert_batch_size)
-    |> Enum.each(&Oban.insert_all/1)
+        case result do
+          {:ok, %Oban.Job{conflict?: true}} -> {ins, dup + 1}
+          {:ok, _} -> {ins + 1, dup}
+          {:error, reason} ->
+            Logger.warning("[Orchestrator] insert failed for #{company.id}: #{inspect(reason)}")
+            {ins, dup}
+        end
+      end)
 
+    Logger.info("[Orchestrator] Enqueued #{inserted}, skipped #{dupes} duplicates")
     :ok
   end
 end

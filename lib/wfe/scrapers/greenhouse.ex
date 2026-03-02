@@ -10,7 +10,7 @@ defmodule Wfe.Scrapers.Greenhouse do
 
     case Req.get(url, receive_timeout: 30_000) do
       {:ok, %{status: 200, body: %{"jobs" => jobs}}} ->
-        {:ok, Enum.map(jobs, &parse/1)}
+        {:ok, Enum.map(jobs, &{&1, parse(&1)})}
 
       {:ok, %{status: status, body: body}} ->
         {:error, {:http_error, status, body}}
@@ -19,6 +19,9 @@ defmodule Wfe.Scrapers.Greenhouse do
         {:error, reason}
     end
   end
+
+  # Greenhouse exposes no structured remote flag on the public boards API.
+  # Location name sometimes literally says "Remote" — let heuristics decide.
 
   defp parse(j) do
     %{

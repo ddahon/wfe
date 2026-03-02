@@ -10,7 +10,7 @@ defmodule Wfe.Scrapers.Ashby do
 
     case Req.get(url, receive_timeout: 30_000) do
       {:ok, %{status: 200, body: %{"jobs" => jobs}}} ->
-        {:ok, Enum.map(jobs, &parse/1)}
+        {:ok, Enum.map(jobs, &{&1, parse(&1)})}
 
       {:ok, %{status: status, body: body}} ->
         {:error, {:http_error, status, body}}
@@ -19,6 +19,12 @@ defmodule Wfe.Scrapers.Ashby do
         {:error, reason}
     end
   end
+
+  @impl true
+  # Ashby has an explicit boolean — trust it.
+  def remote_hint(%{"isRemote" => true}), do: true # TODO: wtf is this?
+  def remote_hint(%{"isRemote" => false}), do: false
+  def remote_hint(_), do: nil
 
   defp parse(j) do
     %{

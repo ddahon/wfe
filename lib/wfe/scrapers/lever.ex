@@ -10,7 +10,7 @@ defmodule Wfe.Scrapers.Lever do
 
     case Req.get(url, receive_timeout: 30_000) do
       {:ok, %{status: 200, body: jobs}} when is_list(jobs) ->
-        {:ok, Enum.map(jobs, &parse/1)}
+        {:ok, Enum.map(jobs, &{&1, parse(&1)})}
 
       {:ok, %{status: status, body: body}} ->
         {:error, {:http_error, status, body}}
@@ -19,6 +19,14 @@ defmodule Wfe.Scrapers.Lever do
         {:error, reason}
     end
   end
+
+  @impl true
+  # Lever v0 has `workplaceType`: "remote" | "hybrid" | "on-site"
+  def remote_hint(%{"workplaceType" => "remote"}), do: true
+  def remote_hint(%{"workplaceType" => "on-site"}), do: false
+  def remote_hint(%{"workplaceType" => "onsite"}), do: false
+  # hybrid → nil → let heuristics decide based on description
+  def remote_hint(_), do: nil
 
   defp parse(j) do
     %{
