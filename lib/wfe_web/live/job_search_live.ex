@@ -28,8 +28,7 @@ defmodule WfeWeb.JobSearchLive do
      assign(socket,
        company: nil,
        presets: @presets,
-       age_filters: @age_filters,
-       custom_age: nil
+       age_filters: @age_filters
      )}
   end
 
@@ -43,16 +42,11 @@ defmodule WfeWeb.JobSearchLive do
     page_size = Search.page_size()
     total_pages = max(1, ceil(total / page_size))
 
-    # Is the current age one of the fixed buttons, or a custom value?
-    fixed_ages = Enum.map(@age_filters, &elem(&1, 1))
-    custom_age = if age in fixed_ages, do: nil, else: age
-
     {:noreply,
      assign(socket,
        query: query,
        page: page,
        age: age,
-       custom_age: custom_age,
        total: total,
        total_pages: total_pages,
        jobs: jobs
@@ -67,11 +61,6 @@ defmodule WfeWeb.JobSearchLive do
   # Preset dropdown — same mechanism as search, just a canned query
   def handle_event("preset", %{"preset" => q}, socket) do
     {:noreply, push_patch(socket, to: self_path(q, 1, socket.assigns.age))}
-  end
-
-  def handle_event("custom_age", %{"days" => raw}, socket) do
-    days = parse_pos_int(raw, nil)
-    {:noreply, push_patch(socket, to: self_path(socket.assigns.query, 1, days))}
   end
 
   def handle_event("show_company", %{"id" => id}, socket) do
@@ -111,26 +100,24 @@ defmodule WfeWeb.JobSearchLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-4xl mx-auto p-6">
-      <h1 class="text-3xl font-bold mb-6">Job Search</h1>
+    <div class="min-h-screen bg-white text-zinc-900">
+      <div class="max-w-4xl mx-auto p-6">
+        <h1 class="text-3xl font-bold mb-6">Job Search</h1>
 
-      <.search_bar query={@query} presets={@presets} />
-      <.age_filter_bar
-        age={@age}
-        custom_age={@custom_age}
-        age_filters={@age_filters}
-        query={@query}
-      />
+        <.search_bar query={@query} />
+        <.age_filter_bar age={@age} age_filters={@age_filters} query={@query} />
+        <.role_selector presets={@presets} query={@query} />
 
-      <p class="text-sm text-zinc-500 mb-4">
-        {@total} result{if @total != 1, do: "s"}
-      </p>
+        <p class="text-sm text-zinc-500 mb-4">
+          {@total} result{if @total != 1, do: "s"}
+        </p>
 
-      <.job_list jobs={@jobs} />
+        <.job_list jobs={@jobs} />
 
-      <.pagination page={@page} total_pages={@total_pages} query={@query} age={@age} />
+        <.pagination page={@page} total_pages={@total_pages} query={@query} age={@age} />
 
-      <.company_modal :if={@company} company={@company} />
+        <.company_modal :if={@company} company={@company} />
+      </div>
     </div>
     """
   end
@@ -139,35 +126,22 @@ defmodule WfeWeb.JobSearchLive do
 
   defp search_bar(assigns) do
     ~H"""
-    <div class="mb-4 flex gap-2">
-      <form phx-submit="search" class="flex flex-1 gap-2">
+    <div class="mb-4">
+      <form phx-submit="search" class="flex gap-2">
         <input
           type="text"
           name="q"
           value={@query}
           placeholder="Search job titles or company names..."
           autocomplete="off"
-          class="flex-1 rounded-lg border border-zinc-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+          class="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400"
         />
         <button
           type="submit"
-          class="rounded-lg bg-zinc-900 px-5 py-2 text-white hover:bg-zinc-700"
+          class="rounded-lg bg-zinc-900 px-5 py-2 text-white hover:bg-zinc-700 transition-colors"
         >
           Search
         </button>
-      </form>
-
-      <form phx-change="preset">
-        <select
-          name="preset"
-          class="rounded-lg border border-zinc-300 px-3 py-2 bg-white"
-          aria-label="Common searches"
-        >
-          <option value="">— Quick picks —</option>
-          <option :for={{label, q} <- @presets} value={q} selected={@query == q}>
-            {label}
-          </option>
-        </select>
       </form>
     </div>
     """
@@ -175,36 +149,63 @@ defmodule WfeWeb.JobSearchLive do
 
   defp age_filter_bar(assigns) do
     ~H"""
-    <div class="mb-6 flex flex-wrap items-center gap-2">
+    <div class="mb-4 flex flex-wrap items-center gap-2">
       <span class="text-sm text-zinc-500">Posted within:</span>
 
       <.link
         :for={{label, days} <- @age_filters}
         patch={filter_path(@query, days)}
         class={[
-          "rounded-full px-3 py-1 text-sm border",
+          "rounded-full px-3 py-1 text-sm border transition-colors",
           if(@age == days,
             do: "bg-zinc-900 text-white border-zinc-900",
-            else: "bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-50"
+            else: "bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-100"
           )
         ]}
       >
         {label}
       </.link>
+    </div>
+    """
+  end
 
-      <form phx-submit="custom_age" class="flex items-center gap-1 ml-2">
-        <input
-          type="number"
-          name="days"
-          min="1"
-          max="90"
-          value={@custom_age}
-          placeholder="custom"
-          class="w-20 rounded border border-zinc-300 px-2 py-1 text-sm"
-        />
-        <button type="submit" class="text-sm text-zinc-600 hover:text-zinc-900">
-          days →
-        </button>
+  defp role_selector(assigns) do
+    ~H"""
+    <div class="mb-6">
+      <form phx-change="preset">
+        <div class="flex items-center gap-3">
+          <label for="role-select" class="text-sm text-zinc-500 whitespace-nowrap">
+            Role type:
+          </label>
+          <div class="relative">
+            <select
+              id="role-select"
+              name="preset"
+              class="appearance-none rounded-lg border border-zinc-300 bg-white pl-4 pr-10 py-2 text-sm text-zinc-900 shadow-sm hover:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400 cursor-pointer transition-colors"
+              aria-label="Filter by role type"
+            >
+              <option value="">All roles</option>
+              <option :for={{label, q} <- @presets} value={q} selected={@query == q}>
+                {label}
+              </option>
+            </select>
+            <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+              <svg
+                class="h-4 w-4 text-zinc-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 9l-7 7-7-7"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
       </form>
     </div>
     """
@@ -258,7 +259,7 @@ defmodule WfeWeb.JobSearchLive do
       <.link
         :if={@page > 1}
         patch={page_path(@query, @age, @page - 1)}
-        class="rounded border border-zinc-300 px-4 py-2 hover:bg-zinc-50"
+        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
       >
         ← Previous
       </.link>
@@ -270,7 +271,7 @@ defmodule WfeWeb.JobSearchLive do
       <.link
         :if={@page < @total_pages}
         patch={page_path(@query, @age, @page + 1)}
-        class="rounded border border-zinc-300 px-4 py-2 hover:bg-zinc-50"
+        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
       >
         Next →
       </.link>
@@ -294,7 +295,7 @@ defmodule WfeWeb.JobSearchLive do
         phx-key="Escape"
       >
         <div class="flex items-start justify-between mb-4">
-          <h2 class="text-xl font-bold">{@company.name}</h2>
+          <h2 class="text-xl font-bold text-zinc-900">{@company.name}</h2>
           <button
             type="button"
             phx-click="close_company"
