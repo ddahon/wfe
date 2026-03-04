@@ -4,7 +4,6 @@ defmodule WfeWeb.JobSearchLive do
   alias Wfe.Jobs.Search
   alias Wfe.Companies
 
-  # Preset role queries — extend freely
   @presets [
     {"Fullstack", "fullstack"},
     {"Backend", "backend"},
@@ -14,7 +13,6 @@ defmodule WfeWeb.JobSearchLive do
     {"ML / AI", "machine learning"}
   ]
 
-  # Quick age filters (days). nil = "all (within 90 days)"
   @age_filters [
     {"All (90d)", nil},
     {"Last 24h", 1},
@@ -58,7 +56,6 @@ defmodule WfeWeb.JobSearchLive do
     {:noreply, push_patch(socket, to: self_path(q, 1, socket.assigns.age))}
   end
 
-  # Preset dropdown — same mechanism as search, just a canned query
   def handle_event("preset", %{"preset" => q}, socket) do
     {:noreply, push_patch(socket, to: self_path(q, 1, socket.assigns.age))}
   end
@@ -71,7 +68,6 @@ defmodule WfeWeb.JobSearchLive do
     {:noreply, assign(socket, company: nil)}
   end
 
-  # Build path with only the params that matter, so URLs stay clean.
   defp self_path(q, page, age) do
     params =
       %{}
@@ -97,6 +93,11 @@ defmodule WfeWeb.JobSearchLive do
   defp parse_age(""), do: nil
   defp parse_age(raw), do: parse_pos_int(raw, nil)
 
+  # Path builder for the shared pagination component
+  defp page_path_fn(query, age) do
+    fn page -> self_path(query, page, age) end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -114,7 +115,11 @@ defmodule WfeWeb.JobSearchLive do
 
         <.job_list jobs={@jobs} />
 
-        <.pagination page={@page} total_pages={@total_pages} query={@query} age={@age} />
+        <.pagination
+          page={@page}
+          total_pages={@total_pages}
+          path_fn={page_path_fn(@query, @age)}
+        />
 
         <.company_modal :if={@company} company={@company} />
       </div>
@@ -122,7 +127,7 @@ defmodule WfeWeb.JobSearchLive do
     """
   end
 
-  # --- Components ---
+  # --- Local Components (specific to job search) ---
 
   defp search_bar(assigns) do
     ~H"""
@@ -252,35 +257,6 @@ defmodule WfeWeb.JobSearchLive do
     </ul>
     """
   end
-
-  defp pagination(assigns) do
-    ~H"""
-    <div :if={@total_pages > 1} class="mt-8 flex items-center justify-center gap-4">
-      <.link
-        :if={@page > 1}
-        patch={page_path(@query, @age, @page - 1)}
-        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
-      >
-        ← Previous
-      </.link>
-
-      <span class="text-sm text-zinc-600">
-        Page {@page} of {@total_pages}
-      </span>
-
-      <.link
-        :if={@page < @total_pages}
-        patch={page_path(@query, @age, @page + 1)}
-        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
-      >
-        Next →
-      </.link>
-    </div>
-    """
-  end
-
-  defp page_path(q, nil, page), do: ~p"/?#{%{q: q, page: page}}"
-  defp page_path(q, age, page), do: ~p"/?#{%{q: q, age: age, page: page}}"
 
   defp company_modal(assigns) do
     ~H"""

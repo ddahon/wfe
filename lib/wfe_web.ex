@@ -86,6 +86,7 @@ defmodule WfeWeb do
       import Phoenix.HTML
       # Core UI components
       import WfeWeb.CoreComponents
+      import WfeWeb.UIComponents
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS
@@ -93,6 +94,7 @@ defmodule WfeWeb do
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())
+
     end
   end
 

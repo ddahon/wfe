@@ -5,16 +5,24 @@ defmodule WfeWeb.ScrapingDashboardLive do
 
   @refresh_interval :timer.seconds(30)
 
+  @time_ranges [
+    {"All", nil},
+    {"24h", "24h"},
+    {"7d", "7d"},
+    {"30d", "30d"}
+  ]
+
+  # ── Mount & Params ─────────────────────────────────────────────────────
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Process.send_after(self(), :refresh, @refresh_interval)
 
     {:ok,
-     socket
-     |> assign(:page_title, "Scraping Dashboard")
-     |> assign(:time_range, "all")
-     |> assign(:ats_filter, nil)
-     |> load_overview_data()}
+     assign(socket,
+       page_title: "Scraping Dashboard",
+       time_ranges: @time_ranges
+     )}
   end
 
   @impl true
@@ -22,66 +30,63 @@ defmodule WfeWeb.ScrapingDashboardLive do
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
 
-  defp apply_action(socket, :index, _params) do
+  defp apply_action(socket, :index, params) do
+    ats = Map.get(params, "ats")
+    range = Map.get(params, "range")
+    page = parse_page(params)
+
     socket
-    |> assign(:page_title, "Scraping Dashboard")
+    |> assign(page_title: "Scraping Dashboard", ats_filter: ats, time_range: range, page: page)
     |> load_overview_data()
   end
 
-  defp apply_action(socket, :run_detail, %{"run_id" => run_id}) do
-    events = FilterInsights.run_details(run_id)
+  defp apply_action(socket, :run_detail, %{"run_id" => run_id} = params) do
+    page = parse_page(params)
+    {events, total} = FilterInsights.run_details(run_id, page: page)
     run_info = FilterInsights.run_summary(run_id)
+    total_pages = calc_total_pages(total)
 
-    socket
-    |> assign(:page_title, "Run Details")
-    |> assign(:run_id, run_id)
-    |> assign(:run_info, run_info)
-    |> assign(:run_events, events)
+    assign(socket,
+      page_title: "Run Details",
+      run_id: run_id,
+      run_info: run_info,
+      run_events: events,
+      page: page,
+      total_pages: total_pages,
+      total: total
+    )
   end
 
-  defp apply_action(socket, :company_detail, %{"company_id" => company_id}) do
+  defp apply_action(socket, :company_detail, %{"company_id" => company_id} = params) do
+    page = parse_page(params)
+    outcome = Map.get(params, "outcome")
     summary = FilterInsights.company_summary(company_id)
-    events = FilterInsights.company_events(company_id, limit: 200)
+    {events, total} = FilterInsights.company_events(company_id, page: page, outcome: outcome)
+    total_pages = calc_total_pages(total)
 
-    socket
-    |> assign(:page_title, "Company Filter Details")
-    |> assign(:detail_company_id, company_id)
-    |> assign(:company_summary, summary)
-    |> assign(:company_events, events)
-    |> assign(:company_outcome_filter, nil)
+    assign(socket,
+      page_title: "Company Filter Details",
+      detail_company_id: company_id,
+      company_summary: summary,
+      company_events: events,
+      company_outcome_filter: outcome,
+      page: page,
+      total_pages: total_pages,
+      total: total
+    )
   end
+
+  # ── Events ─────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("filter-time-range", %{"range" => range}, socket) do
-    {:noreply,
-     socket
-     |> assign(:time_range, range)
-     |> load_overview_data()}
-  end
-
-  def handle_event("filter-ats", %{"ats" => ats}, socket) do
-    ats_filter = if ats == "", do: nil, else: ats
-
-    {:noreply,
-     socket
-     |> assign(:ats_filter, ats_filter)
-     |> load_overview_data()}
+  def handle_event("filter", %{"ats" => ats, "range" => range}, socket) do
+    {:noreply, push_patch(socket, to: index_path(ats, range, 1))}
   end
 
   def handle_event("filter-company-outcome", %{"outcome" => outcome}, socket) do
-    outcome_filter = if outcome == "", do: nil, else: outcome
-
-    events =
-      FilterInsights.company_events(
-        socket.assigns.detail_company_id,
-        limit: 200,
-        outcome: outcome_filter
-      )
-
-    {:noreply,
-     socket
-     |> assign(:company_outcome_filter, outcome_filter)
-     |> assign(:company_events, events)}
+    outcome = if outcome == "", do: nil, else: outcome
+    path = company_path(socket.assigns.detail_company_id, outcome, 1)
+    {:noreply, push_patch(socket, to: path)}
   end
 
   @impl true
@@ -97,593 +102,525 @@ defmodule WfeWeb.ScrapingDashboardLive do
     {:noreply, socket}
   end
 
+  # ── Data Loading ───────────────────────────────────────────────────────
+
   defp load_overview_data(socket) do
-    opts = build_filter_opts(socket.assigns)
+    a = socket.assigns
+    opts = build_filter_opts(a[:ats_filter], a[:time_range])
+    {runs, runs_total} = FilterInsights.recent_runs(Keyword.merge(opts, page: a.page))
+    runs_total_pages = calc_total_pages(runs_total)
 
-    socket
-    |> assign(:summary, FilterInsights.summary(opts))
-    |> assign(:totals, FilterInsights.total_counts(opts))
-    |> assign(:pass_rate, FilterInsights.pass_rate(opts))
-    |> assign(:by_company, FilterInsights.by_company(opts))
-    |> assign(:by_ats, FilterInsights.by_ats(opts))
-    |> assign(:recent_runs, FilterInsights.recent_runs(opts))
+    assign(socket,
+      summary: FilterInsights.summary(opts),
+      totals: FilterInsights.total_counts(opts),
+      pass_rate: FilterInsights.pass_rate(opts),
+      by_company: FilterInsights.by_company(opts),
+      by_ats: FilterInsights.by_ats(opts),
+      recent_runs: runs,
+      runs_total: runs_total,
+      total_pages: runs_total_pages
+    )
   end
 
-  defp build_filter_opts(assigns) do
+  defp build_filter_opts(ats, range) do
     opts = []
-    opts = if assigns[:ats_filter], do: [{:ats, assigns.ats_filter} | opts], else: opts
-    opts = opts ++ since_opt(assigns[:time_range])
-    opts
+    opts = if ats && ats != "", do: [{:ats, ats} | opts], else: opts
+    opts ++ since_opt(range)
   end
 
-  defp since_opt("24h"),
-    do: [since: DateTime.utc_now() |> DateTime.add(-86_400, :second)]
-
-  defp since_opt("7d"),
-    do: [since: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second)]
-
-  defp since_opt("30d"),
-    do: [since: DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)]
-
+  defp since_opt("24h"), do: [since: DateTime.utc_now() |> DateTime.add(-86_400, :second)]
+  defp since_opt("7d"), do: [since: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second)]
+  defp since_opt("30d"), do: [since: DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)]
   defp since_opt(_), do: []
 
-  # ── Templates ──────────────────────────────────────────────────────────
+  # ── Path Builders ──────────────────────────────────────────────────────
+
+  defp index_path(ats, range, page) do
+    params =
+      %{}
+      |> maybe_put("ats", ats)
+      |> maybe_put("range", range)
+      |> maybe_put("page", page, &(&1 > 1))
+
+    ~p"/admin/scraping?#{params}"
+  end
+
+  defp run_path(run_id, page) do
+    params = %{} |> maybe_put("page", page, &(&1 > 1))
+    ~p"/admin/scraping/run/#{run_id}?#{params}"
+  end
+
+  defp company_path(company_id, outcome, page) do
+    params =
+      %{}
+      |> maybe_put("outcome", outcome)
+      |> maybe_put("page", page, &(&1 > 1))
+
+    ~p"/admin/scraping/company/#{company_id}?#{params}"
+  end
+
+  defp maybe_put(map, _k, nil), do: map
+  defp maybe_put(map, _k, ""), do: map
+  defp maybe_put(map, k, v), do: Map.put(map, k, v)
+  defp maybe_put(map, k, v, keep?), do: if(keep?.(v), do: Map.put(map, k, v), else: map)
+
+  defp parse_page(params) do
+    case Integer.parse(Map.get(params, "page", "1")) do
+      {n, _} when n >= 1 -> n
+      _ -> 1
+    end
+  end
+
+  defp calc_total_pages(total) do
+    max(1, ceil(total / FilterInsights.page_size()))
+  end
+
+  # ── Render: Run Detail ─────────────────────────────────────────────────
 
   @impl true
   def render(%{live_action: :run_detail} = assigns) do
     ~H"""
-    <div class="max-w-7xl mx-auto px-4 py-8">
-      <.back_link path={~p"/admin/scraping"} label="Back to Dashboard" />
+    <div class="min-h-screen bg-white text-zinc-900">
+      <div class="max-w-6xl mx-auto p-6">
+        <.back_link path={~p"/admin/scraping"} label="Back to Dashboard" />
 
-      <div class="mb-8">
-        <h1 class="text-2xl font-bold text-gray-900">Run Details</h1>
-        <p class="text-sm text-gray-500 font-mono mt-1">{short_id(@run_id)}</p>
-      </div>
-
-      <%= if @run_info do %>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-          <.stat_card label="Company" value={@run_info.company_name} />
-          <.stat_card label="ATS" value={String.capitalize(@run_info.ats)} />
-          <.stat_card label="Total" value={@run_info.total} />
-          <.stat_card label="Passed" value={@run_info.passed} color="green" />
-          <.stat_card label="Rejected" value={@run_info.rejected} color="red" />
+        <div class="mb-8">
+          <h1 class="text-2xl font-bold text-zinc-900">Run Details</h1>
+          <p class="text-sm text-zinc-500 font-mono mt-1">{short_id(@run_id)}</p>
         </div>
-      <% end %>
 
-      <div class="bg-white shadow rounded-lg overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="table-header">Title</th>
-              <th class="table-header">Location</th>
-              <th class="table-header">Outcome</th>
-              <th class="table-header">Reason</th>
-              <th class="table-header">Link</th>
-            </tr>
-          </thead>
-          <tbody class="bg-white divide-y divide-gray-200">
-            <tr :for={event <- @run_events} class="hover:bg-gray-50">
-              <td class="table-cell font-medium text-gray-900">{event.title || "—"}</td>
-              <td class="table-cell text-gray-500">{event.location || "—"}</td>
-              <td class="table-cell">
-                <.outcome_badge outcome={event.outcome} />
-              </td>
-              <td class="table-cell">
-                <.reason_badge reason={event.reason} />
-              </td>
-              <td class="table-cell">
-                <%= if event.link do %>
-                  <a
-                    href={event.link}
-                    target="_blank"
-                    class="text-indigo-600 hover:text-indigo-900 text-sm"
-                  >
-                    View ↗
-                  </a>
-                <% else %>
-                  <span class="text-gray-400">—</span>
-                <% end %>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <%= if @run_info do %>
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+            <.stat_card label="Company" value={@run_info.company_name} />
+            <.stat_card label="ATS" value={String.capitalize(@run_info.ats)} />
+            <.stat_card label="Total" value={@run_info.total} />
+            <.stat_card label="Passed" value={@run_info.passed} color="green" />
+            <.stat_card label="Rejected" value={@run_info.rejected} color="red" />
+          </div>
+        <% end %>
 
-        <div :if={@run_events == []} class="p-8 text-center text-gray-500">
-          No events found for this run.
-        </div>
+        <.events_table events={@run_events} show_when={false} />
+
+        <.pagination
+          page={@page}
+          total_pages={@total_pages}
+          path_fn={fn p -> run_path(@run_id, p) end}
+        />
       </div>
     </div>
     """
   end
+
+  # ── Render: Company Detail ─────────────────────────────────────────────
 
   def render(%{live_action: :company_detail} = assigns) do
     ~H"""
-    <div class="max-w-7xl mx-auto px-4 py-8">
-      <.back_link path={~p"/admin/scraping"} label="Back to Dashboard" />
+    <div class="min-h-screen bg-white text-zinc-900">
+      <div class="max-w-6xl mx-auto p-6">
+        <.back_link path={~p"/admin/scraping"} label="Back to Dashboard" />
 
-      <%= if @company_summary do %>
-        <div class="mb-8">
-          <h1 class="text-2xl font-bold text-gray-900">{@company_summary.company_name}</h1>
-          <p class="text-sm text-gray-500 mt-1">
-            ATS: {String.capitalize(@company_summary.ats)} · First seen: {format_datetime(
-              @company_summary.first_seen
-            )} · Last seen: {format_datetime(@company_summary.last_seen)}
-          </p>
+        <%= if @company_summary do %>
+          <div class="mb-8">
+            <h1 class="text-2xl font-bold text-zinc-900">{@company_summary.company_name}</h1>
+            <p class="text-sm text-zinc-500 mt-1">
+              ATS: {String.capitalize(@company_summary.ats)}
+              · First seen: {format_datetime(@company_summary.first_seen)}
+              · Last seen: {format_datetime(@company_summary.last_seen)}
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <.stat_card label="Total Evaluated" value={@company_summary.total} />
+            <.stat_card label="Passed" value={@company_summary.passed} color="green" />
+            <.stat_card label="Rejected" value={@company_summary.rejected} color="red" />
+            <.stat_card
+              label="Pass Rate"
+              value={format_percent(@company_summary.passed, @company_summary.total)}
+              color="blue"
+            />
+          </div>
+        <% end %>
+
+        <div class="mb-4">
+          <form phx-change="filter-company-outcome">
+            <select
+              name="outcome"
+              class="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400"
+            >
+              <option value="" selected={@company_outcome_filter == nil}>All outcomes</option>
+              <option value="passed" selected={@company_outcome_filter == "passed"}>
+                Passed only
+              </option>
+              <option value="rejected" selected={@company_outcome_filter == "rejected"}>
+                Rejected only
+              </option>
+            </select>
+          </form>
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <.stat_card label="Total Evaluated" value={@company_summary.total} />
-          <.stat_card label="Passed" value={@company_summary.passed} color="green" />
-          <.stat_card label="Rejected" value={@company_summary.rejected} color="red" />
-          <.stat_card
-            label="Pass Rate"
-            value={format_percent(@company_summary.passed, @company_summary.total)}
-            color="blue"
-          />
-        </div>
-      <% end %>
+        <.events_table events={@company_events} show_when={true} />
 
-      <div class="mb-4">
-        <select
-          phx-change="filter-company-outcome"
-          name="outcome"
-          class="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm"
-        >
-          <option value="" selected={@company_outcome_filter == nil}>All outcomes</option>
-          <option value="passed" selected={@company_outcome_filter == "passed"}>Passed only</option>
-          <option value="rejected" selected={@company_outcome_filter == "rejected"}>
-            Rejected only
-          </option>
-        </select>
-      </div>
-
-      <div class="bg-white shadow rounded-lg overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="table-header">Title</th>
-              <th class="table-header">Location</th>
-              <th class="table-header">Outcome</th>
-              <th class="table-header">Reason</th>
-              <th class="table-header">When</th>
-              <th class="table-header">Link</th>
-            </tr>
-          </thead>
-          <tbody class="bg-white divide-y divide-gray-200">
-            <tr :for={event <- @company_events} class="hover:bg-gray-50">
-              <td class="table-cell font-medium text-gray-900">{event.title || "—"}</td>
-              <td class="table-cell text-gray-500">{event.location || "—"}</td>
-              <td class="table-cell">
-                <.outcome_badge outcome={event.outcome} />
-              </td>
-              <td class="table-cell">
-                <.reason_badge reason={event.reason} />
-              </td>
-              <td class="table-cell text-gray-500 text-xs">
-                {format_datetime(event.inserted_at)}
-              </td>
-              <td class="table-cell">
-                <%= if event.link do %>
-                  <a
-                    href={event.link}
-                    target="_blank"
-                    class="text-indigo-600 hover:text-indigo-900 text-sm"
-                  >
-                    View ↗
-                  </a>
-                <% else %>
-                  <span class="text-gray-400">—</span>
-                <% end %>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div :if={@company_events == []} class="p-8 text-center text-gray-500">
-          No events found.
-        </div>
+        <.pagination
+          page={@page}
+          total_pages={@total_pages}
+          path_fn={
+            fn p -> company_path(@detail_company_id, @company_outcome_filter, p) end
+          }
+        />
       </div>
     </div>
     """
   end
+
+  # ── Render: Index ──────────────────────────────────────────────────────
 
   def render(%{live_action: :index} = assigns) do
     ~H"""
-    <div class="max-w-7xl mx-auto px-4 py-8">
-      <div class="flex items-center justify-between mb-8">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">Scraping Filter Dashboard</h1>
-          <p class="text-sm text-gray-500 mt-1">
-            Remote job filter performance and audit trail
-          </p>
-        </div>
-        <div class="flex items-center gap-3">
-          <select
-            phx-change="filter-ats"
-            name="ats"
-            class="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm"
-          >
-            <option value="" selected={@ats_filter == nil}>All ATS</option>
-            <option
-              :for={ats <- Wfe.Scrapers.supported_ats()}
-              value={ats}
-              selected={@ats_filter == ats}
+    <div class="min-h-screen bg-white text-zinc-900">
+      <div class="max-w-6xl mx-auto p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+          <div>
+            <h1 class="text-2xl font-bold text-zinc-900">Scraping Filter Dashboard</h1>
+            <p class="text-sm text-zinc-500 mt-1">
+              Remote job filter performance and audit trail
+            </p>
+          </div>
+
+          <form phx-change="filter" class="flex items-center gap-3">
+            <select
+              name="ats"
+              class="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400"
             >
-              {String.capitalize(ats)}
-            </option>
-          </select>
+              <option value="" selected={@ats_filter == nil}>All ATS</option>
+              <option
+                :for={ats <- Wfe.Scrapers.supported_ats()}
+                value={ats}
+                selected={@ats_filter == ats}
+              >
+                {String.capitalize(ats)}
+              </option>
+            </select>
 
-          <div class="inline-flex rounded-md shadow-sm">
-            <.time_button range="all" current={@time_range} label="All" position="left" />
-            <.time_button range="24h" current={@time_range} label="24h" position="middle" />
-            <.time_button range="7d" current={@time_range} label="7d" position="middle" />
-            <.time_button range="30d" current={@time_range} label="30d" position="right" />
-          </div>
-        </div>
-      </div>
-
-      <%!-- Overview Stats --%>
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-        <.stat_card
-          label="Total Evaluated"
-          value={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
-        />
-        <.stat_card label="Passed" value={Map.get(@totals, "passed", 0)} color="green" />
-        <.stat_card label="Rejected" value={Map.get(@totals, "rejected", 0)} color="red" />
-        <.stat_card label="Pass Rate" value={format_percent_float(@pass_rate)} color="blue" />
-        <.stat_card label="Companies" value={length(@by_company)} color="purple" />
-      </div>
-
-      <%!-- Breakdown by Reason --%>
-      <div class="grid md:grid-cols-2 gap-6 mb-8">
-        <div class="bg-white shadow rounded-lg p-6">
-          <h2 class="text-lg font-semibold text-gray-900 mb-4">Filter Breakdown</h2>
-          <div class="space-y-3">
-            <.reason_row
-              label="ATS flagged remote"
-              count={Map.get(@summary, {"passed", "ats_hint_remote"}, 0)}
-              total={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
-              color="green"
-            />
-            <.reason_row
-              label="Heuristic pass"
-              count={Map.get(@summary, {"passed", "heuristic_pass"}, 0)}
-              total={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
-              color="emerald"
-            />
-            <.reason_row
-              label="ATS flagged on-site"
-              count={Map.get(@summary, {"rejected", "ats_hint_onsite"}, 0)}
-              total={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
-              color="red"
-            />
-            <.reason_row
-              label="Heuristic reject"
-              count={Map.get(@summary, {"rejected", "heuristic_reject"}, 0)}
-              total={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
-              color="orange"
-            />
-          </div>
-        </div>
-
-        <div class="bg-white shadow rounded-lg p-6">
-          <h2 class="text-lg font-semibold text-gray-900 mb-4">By ATS</h2>
-          <div :if={@by_ats == []} class="text-gray-500 text-sm">No data yet.</div>
-          <div class="space-y-3">
-            <div :for={row <- @by_ats} class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-gray-900">
-                  {String.capitalize(row.ats)}
-                </span>
-                <span class="text-xs text-gray-500">{row.total} jobs</span>
-              </div>
-              <div class="flex items-center gap-3">
-                <div class="w-32 bg-gray-200 rounded-full h-2">
-                  <div
-                    class="bg-indigo-500 h-2 rounded-full"
-                    style={"width: #{Float.round(row.pass_rate * 100, 1)}%"}
-                  >
-                  </div>
-                </div>
-                <span class="text-sm font-mono text-gray-700 w-12 text-right">
-                  {format_percent_float(row.pass_rate)}
-                </span>
-              </div>
+            <div class="inline-flex rounded-lg overflow-hidden border border-zinc-300">
+              <button
+                :for={{label, value} <- @time_ranges}
+                type="submit"
+                name="range"
+                value={value || ""}
+                class={[
+                  "px-3 py-2 text-sm font-medium transition-colors border-r border-zinc-300 last:border-r-0",
+                  if((@time_range || "") == (value || ""),
+                    do: "bg-zinc-900 text-white",
+                    else: "bg-white text-zinc-700 hover:bg-zinc-100"
+                  )
+                ]}
+              >
+                {label}
+              </button>
             </div>
+          </form>
+        </div>
+
+        <%!-- Overview Stats --%>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+          <.stat_card
+            label="Total Evaluated"
+            value={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
+          />
+          <.stat_card label="Passed" value={Map.get(@totals, "passed", 0)} color="green" />
+          <.stat_card label="Rejected" value={Map.get(@totals, "rejected", 0)} color="red" />
+          <.stat_card
+            label="Pass Rate"
+            value={format_percent_float(@pass_rate)}
+            color="blue"
+          />
+          <.stat_card label="Companies" value={length(@by_company)} color="purple" />
+        </div>
+
+        <%!-- Breakdown Cards --%>
+        <div class="grid md:grid-cols-2 gap-6 mb-8">
+          <.filter_breakdown_card summary={@summary} totals={@totals} />
+          <.ats_breakdown_card by_ats={@by_ats} />
+        </div>
+
+        <%!-- Company Table --%>
+        <.company_table rows={@by_company} />
+
+        <%!-- Recent Runs --%>
+        <.runs_table
+          runs={@recent_runs}
+          page={@page}
+          total_pages={@total_pages}
+          ats_filter={@ats_filter}
+          time_range={@time_range}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  # ── Private Components ─────────────────────────────────────────────────
+
+  defp filter_breakdown_card(assigns) do
+    total = Map.get(assigns.totals, "passed", 0) + Map.get(assigns.totals, "rejected", 0)
+    assigns = assign(assigns, :total, total)
+
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <h2 class="text-lg font-semibold text-zinc-900 mb-4">Filter Breakdown</h2>
+      <div class="space-y-3">
+        <.bar_stat
+          label="ATS flagged remote"
+          count={Map.get(@summary, {"passed", "ats_hint_remote"}, 0)}
+          total={@total}
+          color="green"
+        />
+        <.bar_stat
+          label="Heuristic pass"
+          count={Map.get(@summary, {"passed", "heuristic_pass"}, 0)}
+          total={@total}
+          color="emerald"
+        />
+        <.bar_stat
+          label="ATS flagged on-site"
+          count={Map.get(@summary, {"rejected", "ats_hint_onsite"}, 0)}
+          total={@total}
+          color="red"
+        />
+        <.bar_stat
+          label="Heuristic reject"
+          count={Map.get(@summary, {"rejected", "heuristic_reject"}, 0)}
+          total={@total}
+          color="orange"
+        />
+      </div>
+    </div>
+    """
+  end
+
+  defp ats_breakdown_card(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white p-6">
+      <h2 class="text-lg font-semibold text-zinc-900 mb-4">By ATS</h2>
+      <div :if={@by_ats == []} class="text-zinc-500 text-sm">No data yet.</div>
+      <div class="space-y-3">
+        <div :for={row <- @by_ats} class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <.ats_badge ats={row.ats} />
+            <span class="text-xs text-zinc-500">{row.total} jobs</span>
           </div>
+          <.pass_rate_bar rate={row.pass_rate} />
         </div>
       </div>
+    </div>
+    """
+  end
 
-      <%!-- Company Table --%>
-      <div class="bg-white shadow rounded-lg overflow-hidden mb-8">
-        <div class="px-6 py-4 border-b border-gray-200">
-          <h2 class="text-lg font-semibold text-gray-900">By Company</h2>
-        </div>
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="table-header">Company</th>
-              <th class="table-header">ATS</th>
-              <th class="table-header text-right">Total</th>
-              <th class="table-header text-right">Passed</th>
-              <th class="table-header text-right">Rejected</th>
-              <th class="table-header text-right">Pass Rate</th>
-              <th class="table-header"></th>
-            </tr>
-          </thead>
-          <tbody class="bg-white divide-y divide-gray-200">
-            <tr :for={row <- @by_company} class="hover:bg-gray-50">
-              <td class="table-cell font-medium text-gray-900">{row.company_name}</td>
-              <td class="table-cell">
-                <.ats_badge ats={row.ats} />
-              </td>
-              <td class="table-cell text-right tabular-nums">{row.total}</td>
-              <td class="table-cell text-right tabular-nums text-green-700">{row.passed}</td>
-              <td class="table-cell text-right tabular-nums text-red-700">{row.rejected}</td>
-              <td class="table-cell text-right">
-                <div class="flex items-center justify-end gap-2">
-                  <div class="w-16 bg-gray-200 rounded-full h-1.5">
-                    <div
-                      class="bg-green-500 h-1.5 rounded-full"
-                      style={"width: #{Float.round(row.pass_rate * 100, 1)}%"}
-                    >
-                    </div>
-                  </div>
-                  <span class="text-sm tabular-nums">{format_percent_float(row.pass_rate)}</span>
-                </div>
-              </td>
-              <td class="table-cell text-right">
-                <.link
-                  navigate={~p"/admin/scraping/company/#{row.company_id}"}
-                  class="text-indigo-600 hover:text-indigo-900 text-sm"
+  attr :rows, :list, required: true
+
+  defp company_table(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden mb-8">
+      <div class="px-6 py-4 border-b border-zinc-200">
+        <h2 class="text-lg font-semibold text-zinc-900">By Company</h2>
+      </div>
+      <table class="min-w-full divide-y divide-zinc-200">
+        <thead class="bg-zinc-50">
+          <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Company
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              ATS
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Total
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Passed
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Rejected
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Pass Rate
+            </th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200">
+          <tr :for={row <- @rows} class="hover:bg-zinc-50">
+            <td class="px-4 py-3 text-sm font-medium text-zinc-900">{row.company_name}</td>
+            <td class="px-4 py-3 text-sm">
+              <.ats_badge ats={row.ats} />
+            </td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums">{row.total}</td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums text-green-700">{row.passed}</td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums text-red-700">{row.rejected}</td>
+            <td class="px-4 py-3 text-sm text-right">
+              <.pass_rate_bar rate={row.pass_rate} />
+            </td>
+            <td class="px-4 py-3 text-sm text-right">
+              <.link
+                navigate={~p"/admin/scraping/company/#{row.company_id}"}
+                class="text-zinc-600 hover:text-zinc-900 font-medium"
+              >
+                Details →
+              </.link>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <.empty_state :if={@rows == []} message="No filter events recorded yet. Run a scrape to generate data." />
+    </div>
+    """
+  end
+
+  attr :runs, :list, required: true
+  attr :page, :integer, required: true
+  attr :total_pages, :integer, required: true
+  attr :ats_filter, :string, default: nil
+  attr :time_range, :string, default: nil
+
+  defp runs_table(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden">
+      <div class="px-6 py-4 border-b border-zinc-200">
+        <h2 class="text-lg font-semibold text-zinc-900">Recent Runs</h2>
+      </div>
+      <table class="min-w-full divide-y divide-zinc-200">
+        <thead class="bg-zinc-50">
+          <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Run
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Company
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              ATS
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Total
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Passed
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Rejected
+            </th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Pass Rate
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              When
+            </th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200">
+          <tr :for={run <- @runs} class="hover:bg-zinc-50">
+            <td class="px-4 py-3 font-mono text-xs text-zinc-600">{short_id(run.run_id)}</td>
+            <td class="px-4 py-3 text-sm text-zinc-900">{run.company_name}</td>
+            <td class="px-4 py-3 text-sm">
+              <.ats_badge ats={run.ats} />
+            </td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums">{run.total}</td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums text-green-700">{run.passed}</td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums text-red-700">{run.rejected}</td>
+            <td class="px-4 py-3 text-sm text-right tabular-nums">
+              {format_percent_float(run.pass_rate)}
+            </td>
+            <td class="px-4 py-3 text-zinc-500 text-xs">{format_datetime(run.started_at)}</td>
+            <td class="px-4 py-3 text-sm text-right">
+              <.link
+                navigate={~p"/admin/scraping/run/#{run.run_id}"}
+                class="text-zinc-600 hover:text-zinc-900 font-medium"
+              >
+                Inspect →
+              </.link>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <.empty_state :if={@runs == []} message="No runs recorded yet." />
+    </div>
+
+    <.pagination
+      page={@page}
+      total_pages={@total_pages}
+      path_fn={fn p -> index_path(@ats_filter, @time_range, p) end}
+    />
+    """
+  end
+
+  attr :events, :list, required: true
+  attr :show_when, :boolean, default: true
+
+  defp events_table(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden">
+      <table class="min-w-full divide-y divide-zinc-200">
+        <thead class="bg-zinc-50">
+          <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Title
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Location
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Outcome
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Reason
+            </th>
+            <th
+              :if={@show_when}
+              class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider"
+            >
+              When
+            </th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Link
+            </th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200">
+          <tr :for={event <- @events} class="hover:bg-zinc-50">
+            <td class="px-4 py-3 text-sm font-medium text-zinc-900">
+              {Map.get(event, :title) || "—"}
+            </td>
+            <td class="px-4 py-3 text-sm text-zinc-500">
+              {Map.get(event, :location) || "—"}
+            </td>
+            <td class="px-4 py-3 text-sm">
+              <.outcome_badge outcome={Map.get(event, :outcome)} />
+            </td>
+            <td class="px-4 py-3 text-sm">
+              <.reason_badge reason={Map.get(event, :reason)} />
+            </td>
+            <td :if={@show_when} class="px-4 py-3 text-xs text-zinc-500">
+              {format_datetime(Map.get(event, :inserted_at))}
+            </td>
+            <td class="px-4 py-3 text-sm">
+              <%= if link = Map.get(event, :link) do %>
+                <a
+                  href={link}
+                  target="_blank"
+                  class="text-zinc-600 hover:text-zinc-900"
                 >
-                  Details →
-                </.link>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div :if={@by_company == []} class="p-8 text-center text-gray-500">
-          No filter events recorded yet. Run a scrape to generate data.
-        </div>
-      </div>
-
-      <%!-- Recent Runs --%>
-      <div class="bg-white shadow rounded-lg overflow-hidden">
-        <div class="px-6 py-4 border-b border-gray-200">
-          <h2 class="text-lg font-semibold text-gray-900">Recent Runs</h2>
-        </div>
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="table-header">Run ID</th>
-              <th class="table-header">ATS</th>
-              <th class="table-header text-right">Total</th>
-              <th class="table-header text-right">Passed</th>
-              <th class="table-header text-right">Rejected</th>
-              <th class="table-header text-right">Pass Rate</th>
-              <th class="table-header">When</th>
-              <th class="table-header"></th>
-            </tr>
-          </thead>
-          <tbody class="bg-white divide-y divide-gray-200">
-            <tr :for={run <- @recent_runs} class="hover:bg-gray-50">
-              <td class="table-cell font-mono text-xs text-gray-600">{short_id(run.run_id)}</td>
-              <td class="table-cell">
-                <.ats_badge ats={run.ats} />
-              </td>
-              <td class="table-cell text-right tabular-nums">{run.total}</td>
-              <td class="table-cell text-right tabular-nums text-green-700">{run.passed}</td>
-              <td class="table-cell text-right tabular-nums text-red-700">{run.rejected}</td>
-              <td class="table-cell text-right tabular-nums">
-                {format_percent_float(run.pass_rate)}
-              </td>
-              <td class="table-cell text-gray-500 text-xs">
-                {format_datetime(run.started_at)}
-              </td>
-              <td class="table-cell text-right">
-                <.link
-                  navigate={~p"/admin/scraping/run/#{run.run_id}"}
-                  class="text-indigo-600 hover:text-indigo-900 text-sm"
-                >
-                  Inspect →
-                </.link>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div :if={@recent_runs == []} class="p-8 text-center text-gray-500">
-          No runs recorded yet.
-        </div>
-      </div>
+                  View ↗
+                </a>
+              <% else %>
+                <span class="text-zinc-400">—</span>
+              <% end %>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <.empty_state :if={@events == []} message="No events found." />
     </div>
     """
-  end
-
-  # ── Function Components ────────────────────────────────────────────────
-
-  attr :label, :string, required: true
-  attr :value, :any, required: true
-  attr :color, :string, default: "gray"
-
-  defp stat_card(assigns) do
-    ~H"""
-    <div class="bg-white shadow rounded-lg p-4">
-      <dt class="text-sm font-medium text-gray-500 truncate">{@label}</dt>
-      <dd class={[
-        "mt-1 text-2xl font-bold tabular-nums",
-        stat_color(@color)
-      ]}>
-        {@value}
-      </dd>
-    </div>
-    """
-  end
-
-  defp stat_color("green"), do: "text-green-700"
-  defp stat_color("red"), do: "text-red-700"
-  defp stat_color("blue"), do: "text-blue-700"
-  defp stat_color("purple"), do: "text-purple-700"
-  defp stat_color(_), do: "text-gray-900"
-
-  attr :label, :string, required: true
-  attr :count, :integer, required: true
-  attr :total, :integer, required: true
-  attr :color, :string, required: true
-
-  defp reason_row(assigns) do
-    pct = if assigns.total > 0, do: assigns.count / assigns.total * 100, else: 0
-    assigns = assign(assigns, :pct, pct)
-
-    ~H"""
-    <div>
-      <div class="flex justify-between text-sm mb-1">
-        <span class="text-gray-700">{@label}</span>
-        <span class="font-mono text-gray-900">{@count}</span>
-      </div>
-      <div class="w-full bg-gray-200 rounded-full h-2">
-        <div class={bar_color(@color)} style={"width: #{Float.round(@pct, 1)}%"}></div>
-      </div>
-    </div>
-    """
-  end
-
-  defp bar_color("green"), do: "bg-green-500 h-2 rounded-full"
-  defp bar_color("emerald"), do: "bg-emerald-500 h-2 rounded-full"
-  defp bar_color("red"), do: "bg-red-500 h-2 rounded-full"
-  defp bar_color("orange"), do: "bg-orange-500 h-2 rounded-full"
-  defp bar_color(_), do: "bg-gray-500 h-2 rounded-full"
-
-  attr :outcome, :string, required: true
-
-  defp outcome_badge(assigns) do
-    ~H"""
-    <span class={[
-      "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium",
-      if(@outcome == "passed",
-        do: "bg-green-100 text-green-800",
-        else: "bg-red-100 text-red-800"
-      )
-    ]}>
-      {@outcome}
-    </span>
-    """
-  end
-
-  attr :reason, :string, required: true
-
-  defp reason_badge(assigns) do
-    ~H"""
-    <span class={[
-      "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
-      reason_badge_color(@reason)
-    ]}>
-      {humanize_reason(@reason)}
-    </span>
-    """
-  end
-
-  defp reason_badge_color("ats_hint_remote"), do: "bg-green-50 text-green-700"
-  defp reason_badge_color("ats_hint_onsite"), do: "bg-red-50 text-red-700"
-  defp reason_badge_color("heuristic_pass"), do: "bg-emerald-50 text-emerald-700"
-  defp reason_badge_color("heuristic_reject"), do: "bg-orange-50 text-orange-700"
-  defp reason_badge_color(_), do: "bg-gray-50 text-gray-700"
-
-  defp humanize_reason("ats_hint_remote"), do: "ATS: Remote"
-  defp humanize_reason("ats_hint_onsite"), do: "ATS: On-site"
-  defp humanize_reason("heuristic_pass"), do: "Heuristic: Pass"
-  defp humanize_reason("heuristic_reject"), do: "Heuristic: Reject"
-  defp humanize_reason(other), do: other
-
-  attr :ats, :string, required: true
-
-  defp ats_badge(assigns) do
-    ~H"""
-    <span class={[
-      "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
-      ats_badge_color(@ats)
-    ]}>
-      {String.capitalize(@ats)}
-    </span>
-    """
-  end
-
-  defp ats_badge_color("greenhouse"), do: "bg-green-50 text-green-700"
-  defp ats_badge_color("lever"), do: "bg-blue-50 text-blue-700"
-  defp ats_badge_color("ashby"), do: "bg-purple-50 text-purple-700"
-  defp ats_badge_color("workable"), do: "bg-yellow-50 text-yellow-700"
-  defp ats_badge_color("recruitee"), do: "bg-pink-50 text-pink-700"
-  defp ats_badge_color(_), do: "bg-gray-50 text-gray-700"
-
-  attr :range, :string, required: true
-  attr :current, :string, required: true
-  attr :label, :string, required: true
-  attr :position, :string, required: true
-
-  defp time_button(assigns) do
-    ~H"""
-    <button
-      phx-click="filter-time-range"
-      phx-value-range={@range}
-      class={[
-        "px-3 py-1.5 text-sm font-medium border",
-        time_button_position(@position),
-        if(@range == @current,
-          do: "bg-indigo-600 text-white border-indigo-600 z-10",
-          else: "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-        )
-      ]}
-    >
-      {@label}
-    </button>
-    """
-  end
-
-  defp time_button_position("left"), do: "rounded-l-md"
-  defp time_button_position("right"), do: "rounded-r-md -ml-px"
-  defp time_button_position(_), do: "-ml-px"
-
-  attr :path, :string, required: true
-  attr :label, :string, required: true
-
-  defp back_link(assigns) do
-    ~H"""
-    <.link
-      navigate={@path}
-      class="inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-800 mb-4"
-    >
-      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-      </svg>
-      {@label}
-    </.link>
-    """
-  end
-
-  # ── Helpers ────────────────────────────────────────────────────────────
-
-  defp short_id(nil), do: "—"
-  defp short_id(uuid), do: String.slice(uuid, 0, 8)
-
-  defp format_percent_float(rate) when is_float(rate) do
-    "#{Float.round(rate * 100, 1)}%"
-  end
-
-  defp format_percent_float(_), do: "0%"
-
-  defp format_percent(passed, total) when is_integer(total) and total > 0 do
-    "#{Float.round(passed / total * 100, 1)}%"
-  end
-
-  defp format_percent(_, _), do: "0%"
-
-  defp format_datetime(nil), do: "—"
-
-  defp format_datetime(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%b %d, %H:%M")
-  end
-
-  defp format_datetime(%NaiveDateTime{} = dt) do
-    Calendar.strftime(dt, "%b %d, %H:%M")
   end
 end

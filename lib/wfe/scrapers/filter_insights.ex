@@ -7,6 +7,10 @@ defmodule Wfe.Scrapers.FilterInsights do
   alias Wfe.Repo
   alias Wfe.Scrapers.FilterEvent
 
+  @page_size 25
+
+  def page_size, do: @page_size
+
   def summary(opts \\ []) do
     base_query(opts)
     |> group_by([e], [e.outcome, e.reason])
@@ -65,45 +69,72 @@ defmodule Wfe.Scrapers.FilterInsights do
   end
 
   def recent_runs(opts \\ []) do
-    limit = Keyword.get(opts, :limit, 20)
+    page = Keyword.get(opts, :page, 1)
 
-    base_query(opts)
-    |> group_by([e], [e.run_id, e.ats])
-    |> select([e], %{
-      run_id: e.run_id,
-      ats: e.ats,
-      passed: fragment("SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END)", e.outcome),
-      rejected: fragment("SUM(CASE WHEN ? = 'rejected' THEN 1 ELSE 0 END)", e.outcome),
-      total: count(e.id),
-      started_at: min(e.inserted_at)
-    })
-    |> order_by([e], desc: min(e.inserted_at))
-    |> limit(^limit)
-    |> Repo.all()
-    |> Enum.map(fn row ->
-      Map.put(row, :pass_rate, if(row.total > 0, do: row.passed / row.total, else: 0.0))
-    end)
-  end
-
-  def run_details(run_id) do
-    from(e in FilterEvent,
-      where: e.run_id == ^run_id,
-      join: c in assoc(e, :company),
-      select: %{
-        id: e.id,
-        external_id: e.external_id,
-        title: e.title,
-        location: e.location,
-        link: e.link,
-        outcome: e.outcome,
-        reason: e.reason,
+    query =
+      base_query(opts)
+      |> join(:inner, [e], c in assoc(e, :company))
+      |> group_by([e, c], [e.run_id, e.ats, c.name, c.id])
+      |> select([e, c], %{
+        run_id: e.run_id,
         ats: e.ats,
         company_name: c.name,
-        inserted_at: e.inserted_at
-      },
-      order_by: [e.outcome, e.reason, e.title]
-    )
-    |> Repo.all()
+        company_id: c.id,
+        passed: fragment("SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END)", e.outcome),
+        rejected: fragment("SUM(CASE WHEN ? = 'rejected' THEN 1 ELSE 0 END)", e.outcome),
+        total: count(e.id),
+        started_at: min(e.inserted_at)
+      })
+      |> order_by([e, c], desc: min(e.inserted_at))
+
+    total =
+      base_query(opts)
+      |> select([e], fragment("COUNT(DISTINCT ?)", e.run_id))
+      |> Repo.one() || 0
+
+    runs =
+      query
+      |> limit(^@page_size)
+      |> offset(^((@page_size * (page - 1))))
+      |> Repo.all()
+      |> Enum.map(fn row ->
+        Map.put(row, :pass_rate, if(row.total > 0, do: row.passed / row.total, else: 0.0))
+      end)
+
+    {runs, total}
+  end
+
+  def run_details(run_id, opts \\ []) do
+    page = Keyword.get(opts, :page, 1)
+
+    query =
+      from(e in FilterEvent,
+        where: e.run_id == ^run_id,
+        join: c in assoc(e, :company),
+        select: %{
+          id: e.id,
+          external_id: e.external_id,
+          title: e.title,
+          location: e.location,
+          link: e.link,
+          outcome: e.outcome,
+          reason: e.reason,
+          ats: e.ats,
+          company_name: c.name,
+          inserted_at: e.inserted_at
+        },
+        order_by: [e.outcome, e.reason, e.title]
+      )
+
+    total = Repo.aggregate(from(e in FilterEvent, where: e.run_id == ^run_id), :count) || 0
+
+    events =
+      query
+      |> limit(^@page_size)
+      |> offset(^(@page_size * (page - 1)))
+      |> Repo.all()
+
+    {events, total}
   end
 
   def run_summary(run_id) do
@@ -125,24 +156,26 @@ defmodule Wfe.Scrapers.FilterInsights do
   end
 
   def company_events(company_id, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 100)
+    page = Keyword.get(opts, :page, 1)
     outcome = Keyword.get(opts, :outcome)
 
     query =
       from(e in FilterEvent,
         where: e.company_id == ^company_id,
-        order_by: [desc: e.inserted_at],
-        limit: ^limit
+        order_by: [desc: e.inserted_at]
       )
 
-    query =
-      if outcome do
-        where(query, [e], e.outcome == ^outcome)
-      else
-        query
-      end
+    query = if outcome, do: where(query, [e], e.outcome == ^outcome), else: query
 
-    Repo.all(query)
+    total = Repo.aggregate(query, :count) || 0
+
+    events =
+      query
+      |> limit(^@page_size)
+      |> offset(^(@page_size * (page - 1)))
+      |> Repo.all()
+
+    {events, total}
   end
 
   def company_summary(company_id) do
@@ -162,14 +195,6 @@ defmodule Wfe.Scrapers.FilterInsights do
       }
     )
     |> Repo.one()
-  end
-
-  def rejected(opts \\ []) do
-    base_query(opts)
-    |> where([e], e.outcome == "rejected")
-    |> order_by([e], desc: e.inserted_at)
-    |> limit(100)
-    |> Repo.all()
   end
 
   def prune(days \\ 30) do
