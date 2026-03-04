@@ -5,9 +5,12 @@ defmodule Wfe.Scrapers do
   Filtering is two-tiered:
     1. ATS-provided hints (optional `remote_hint/1` callback on raw payload)
     2. Heuristic fallback on parsed fields (`Wfe.Jobs.RemoteFilter`)
+
+  Every decision is recorded in `filter_events` for auditing.
   """
 
   alias Wfe.Jobs.RemoteFilter
+  alias Wfe.Scrapers.FilterAudit
 
   require Logger
 
@@ -37,35 +40,61 @@ defmodule Wfe.Scrapers do
     end
   end
 
-  # --- Filtering ------------------------------------------------------------
+  # --- Filtering with Audit -------------------------------------------------
 
-  # Scrapers return `{raw, parsed}` tuples so we can consult raw ATS
-  # fields for structured remote hints before resorting to text heuristics.
   defp filter_remote(mod, company, pairs) do
-    # Bucket by hint result: true (keep), false (drop), nil (undecided).
+    run_id = Ecto.UUID.generate()
+
+    # 1. Bucket by ATS hint: true / false / nil
     by_hint =
       Enum.group_by(pairs, fn {raw, _parsed} -> apply_hint(mod, raw) end)
 
-    definite = parsed_for(by_hint, true)
-    _dropped = parsed_for(by_hint, false)
-    unknown = parsed_for(by_hint, nil)
+    # 2. Build decisions for ATS-hinted jobs
+    ats_remote_decisions =
+      by_hint
+      |> Map.get(true, [])
+      |> Enum.map(fn {_raw, parsed} -> {parsed, "passed", "ats_hint_remote"} end)
 
-    heuristic = RemoteFilter.apply(unknown)
-    kept = definite ++ heuristic
+    ats_onsite_decisions =
+      by_hint
+      |> Map.get(false, [])
+      |> Enum.map(fn {_raw, parsed} -> {parsed, "rejected", "ats_hint_onsite"} end)
+
+    # 3. Run heuristics on undecided jobs
+    unknown_parsed = by_hint |> Map.get(nil, []) |> Enum.map(&elem(&1, 1))
+    {heuristic_passed, heuristic_rejected} = RemoteFilter.apply_with_rejects(unknown_parsed)
+
+    heuristic_pass_decisions =
+      Enum.map(heuristic_passed, fn parsed -> {parsed, "passed", "heuristic_pass"} end)
+
+    heuristic_reject_decisions =
+      Enum.map(heuristic_rejected, fn parsed -> {parsed, "rejected", "heuristic_reject"} end)
+
+    # 4. Collect all decisions and persist
+    all_decisions =
+      ats_remote_decisions ++
+        ats_onsite_decisions ++
+        heuristic_pass_decisions ++
+        heuristic_reject_decisions
+
+    # Persist asynchronously so it doesn't slow down the pipeline.
+    # If you prefer guaranteed writes, remove the Task wrapper.
+    Task.start(fn ->
+      FilterAudit.record(company, all_decisions, run_id)
+    end)
+
+    # 5. Return only the kept jobs
+    kept_parsed = Enum.map(ats_remote_decisions, &elem(&1, 0)) ++ heuristic_passed
 
     Logger.debug("""
-    [Scrapers] #{company.name}: #{length(pairs)} fetched
-      #{length(definite)} ATS-flagged remote
-      #{length(parsed_for(by_hint, false))} ATS-flagged on-site
-      #{length(heuristic)}/#{length(unknown)} passed heuristics
-      #{length(kept)} kept
+    [Scrapers] #{company.name} (run #{run_id}): #{length(pairs)} fetched
+      #{length(ats_remote_decisions)} ATS-flagged remote
+      #{length(ats_onsite_decisions)} ATS-flagged on-site
+      #{length(heuristic_passed)}/#{length(unknown_parsed)} passed heuristics
+      #{length(kept_parsed)} kept
     """)
 
-    kept
-  end
-
-  defp parsed_for(groups, key) do
-    groups |> Map.get(key, []) |> Enum.map(&elem(&1, 1))
+    kept_parsed
   end
 
   defp apply_hint(mod, raw) do
