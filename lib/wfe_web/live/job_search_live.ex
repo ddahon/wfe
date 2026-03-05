@@ -26,7 +26,8 @@ defmodule WfeWeb.JobSearchLive do
      assign(socket,
        company: nil,
        presets: @presets,
-       age_filters: @age_filters
+       age_filters: @age_filters,
+       jobs_empty?: true
      )}
   end
 
@@ -41,14 +42,16 @@ defmodule WfeWeb.JobSearchLive do
     total_pages = max(1, ceil(total / page_size))
 
     {:noreply,
-     assign(socket,
+     socket
+     |> assign(
        query: query,
        page: page,
        age: age,
        total: total,
        total_pages: total_pages,
-       jobs: jobs
-     )}
+       jobs_empty?: jobs == []
+     )
+     |> stream(:jobs, jobs, reset: true)}
   end
 
   @impl true
@@ -93,7 +96,6 @@ defmodule WfeWeb.JobSearchLive do
   defp parse_age(""), do: nil
   defp parse_age(raw), do: parse_pos_int(raw, nil)
 
-  # Path builder for the shared pagination component
   defp page_path_fn(query, age) do
     fn page -> self_path(query, page, age) end
   end
@@ -101,7 +103,7 @@ defmodule WfeWeb.JobSearchLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="min-h-screen bg-white text-zinc-900">
+    <Layouts.app flash={@flash}>
       <div class="max-w-4xl mx-auto p-6">
         <h1 class="text-3xl font-bold mb-6">Job Search</h1>
 
@@ -113,7 +115,7 @@ defmodule WfeWeb.JobSearchLive do
           {@total} result{if @total != 1, do: "s"}
         </p>
 
-        <.job_list jobs={@jobs} />
+        <.job_list jobs={@streams.jobs} jobs_empty?={@jobs_empty?} />
 
         <.pagination
           page={@page}
@@ -123,16 +125,14 @@ defmodule WfeWeb.JobSearchLive do
 
         <.company_modal :if={@company} company={@company} />
       </div>
-    </div>
+    </Layouts.app>
     """
   end
-
-  # --- Local Components (specific to job search) ---
 
   defp search_bar(assigns) do
     ~H"""
     <div class="mb-4">
-      <form phx-submit="search" class="flex gap-2">
+      <form id="search-form" phx-submit="search" class="flex gap-2">
         <input
           type="text"
           name="q"
@@ -159,7 +159,7 @@ defmodule WfeWeb.JobSearchLive do
 
       <.link
         :for={{label, days} <- @age_filters}
-        patch={filter_path(@query, days)}
+        patch={self_path(@query, 1, days)}
         class={[
           "rounded-full px-3 py-1 text-sm border transition-colors",
           if(@age == days,
@@ -177,7 +177,7 @@ defmodule WfeWeb.JobSearchLive do
   defp role_selector(assigns) do
     ~H"""
     <div class="mb-6">
-      <form phx-change="preset">
+      <form id="role-form" phx-change="preset">
         <div class="flex items-center gap-3">
           <label for="role-select" class="text-sm text-zinc-500 whitespace-nowrap">
             Role type:
@@ -195,19 +195,7 @@ defmodule WfeWeb.JobSearchLive do
               </option>
             </select>
             <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-              <svg
-                class="h-4 w-4 text-zinc-500"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M19 9l-7 7-7-7"
-                />
-              </svg>
+              <.icon name="hero-chevron-down" class="h-4 w-4 text-zinc-500" />
             </div>
           </div>
         </div>
@@ -216,17 +204,13 @@ defmodule WfeWeb.JobSearchLive do
     """
   end
 
-  defp filter_path(query, nil), do: ~p"/?#{%{q: query}}"
-  defp filter_path(query, days), do: ~p"/?#{%{q: query, age: days}}"
-
   defp job_list(assigns) do
     ~H"""
-    <div :if={@jobs == []} class="text-center text-zinc-500 py-12">
-      No jobs found.
-    </div>
-
-    <ul class="divide-y divide-zinc-200">
-      <li :for={job <- @jobs} class="py-4">
+    <ul id="jobs" phx-update="stream" class="divide-y divide-zinc-200">
+      <li :if={@jobs_empty?} class="text-center text-zinc-500 py-12">
+        No jobs found.
+      </li>
+      <li :for={{id, job} <- @jobs} id={id} class="py-4">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0 flex-1">
             <a
@@ -260,11 +244,9 @@ defmodule WfeWeb.JobSearchLive do
 
   defp company_modal(assigns) do
     ~H"""
-    <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      phx-click="close_company"
-    >
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div
+        id="company-modal"
         class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl"
         phx-click-away="close_company"
         phx-window-keydown="close_company"
@@ -278,7 +260,7 @@ defmodule WfeWeb.JobSearchLive do
             class="text-zinc-400 hover:text-zinc-600"
             aria-label="Close"
           >
-            ✕
+            <.icon name="hero-x-mark" class="w-5 h-5" />
           </button>
         </div>
 
