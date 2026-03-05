@@ -33,10 +33,21 @@ defmodule WfeWeb.ScrapingDashboardLive do
   defp apply_action(socket, :index, params) do
     ats = Map.get(params, "ats")
     range = Map.get(params, "range")
+    search = Map.get(params, "search")
+    sort_by = Map.get(params, "sort_by", "started_at")
+    sort_dir = Map.get(params, "sort_dir", "desc")
     page = parse_page(params)
 
     socket
-    |> assign(page_title: "Scraping Dashboard", ats_filter: ats, time_range: range, page: page)
+    |> assign(
+      page_title: "Scraping Dashboard",
+      ats_filter: ats,
+      time_range: range,
+      search: search,
+      sort_by: sort_by,
+      sort_dir: sort_dir,
+      page: page
+    )
     |> load_overview_data()
   end
 
@@ -79,8 +90,39 @@ defmodule WfeWeb.ScrapingDashboardLive do
   # ── Events ─────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("filter", %{"ats" => ats, "range" => range}, socket) do
-    {:noreply, push_patch(socket, to: index_path(ats, range, 1))}
+  def handle_event("filter", params, socket) do
+    ats = Map.get(params, "ats", socket.assigns[:ats_filter])
+    range = Map.get(params, "range", socket.assigns[:time_range])
+    search = Map.get(params, "search", socket.assigns[:search])
+
+    ats = if ats == "", do: nil, else: ats
+    range = if range == "", do: nil, else: range
+    search = if search == "", do: nil, else: search
+
+    path = index_path(ats, range, search, socket.assigns.sort_by, socket.assigns.sort_dir, 1)
+    {:noreply, push_patch(socket, to: path)}
+  end
+
+  def handle_event("sort", %{"field" => field}, socket) do
+    {sort_by, sort_dir} =
+      if socket.assigns.sort_by == field do
+        new_dir = if socket.assigns.sort_dir == "asc", do: "desc", else: "asc"
+        {field, new_dir}
+      else
+        {field, "desc"}
+      end
+
+    path =
+      index_path(
+        socket.assigns.ats_filter,
+        socket.assigns.time_range,
+        socket.assigns.search,
+        sort_by,
+        sort_dir,
+        1
+      )
+
+    {:noreply, push_patch(socket, to: path)}
   end
 
   def handle_event("filter-company-outcome", %{"outcome" => outcome}, socket) do
@@ -103,19 +145,28 @@ defmodule WfeWeb.ScrapingDashboardLive do
   end
 
   # ── Data Loading ───────────────────────────────────────────────────────
-
   defp load_overview_data(socket) do
     a = socket.assigns
-    opts = build_filter_opts(a[:ats_filter], a[:time_range])
-    {runs, runs_total} = FilterInsights.recent_runs(Keyword.merge(opts, page: a.page))
+    base_opts = build_filter_opts(a[:ats_filter], a[:time_range])
+
+    run_opts =
+      base_opts
+      |> Keyword.merge(
+        page: a.page,
+        search: a[:search],
+        sort_by: safe_atom(a[:sort_by], :started_at),
+        sort_dir: safe_atom(a[:sort_dir], :desc)
+      )
+
+    {runs, runs_total} = FilterInsights.recent_runs(run_opts)
     runs_total_pages = calc_total_pages(runs_total)
 
     assign(socket,
-      summary: FilterInsights.summary(opts),
-      totals: FilterInsights.total_counts(opts),
-      pass_rate: FilterInsights.pass_rate(opts),
-      by_company: FilterInsights.by_company(opts),
-      by_ats: FilterInsights.by_ats(opts),
+      summary: FilterInsights.summary(base_opts),
+      totals: FilterInsights.total_counts(base_opts),
+      pass_rate: FilterInsights.pass_rate(base_opts),
+      by_company: FilterInsights.by_company(base_opts),
+      by_ats: FilterInsights.by_ats(base_opts),
       recent_runs: runs,
       runs_total: runs_total,
       total_pages: runs_total_pages
@@ -128,6 +179,17 @@ defmodule WfeWeb.ScrapingDashboardLive do
     opts ++ since_opt(range)
   end
 
+  defp safe_atom(val, default) when is_binary(val) do
+    try do
+      String.to_existing_atom(val)
+    rescue
+      ArgumentError -> default
+    end
+  end
+
+  defp safe_atom(val, _default) when is_atom(val), do: val
+  defp safe_atom(_, default), do: default
+
   defp since_opt("24h"), do: [since: DateTime.utc_now() |> DateTime.add(-86_400, :second)]
   defp since_opt("7d"), do: [since: DateTime.utc_now() |> DateTime.add(-7 * 86_400, :second)]
   defp since_opt("30d"), do: [since: DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)]
@@ -135,11 +197,14 @@ defmodule WfeWeb.ScrapingDashboardLive do
 
   # ── Path Builders ──────────────────────────────────────────────────────
 
-  defp index_path(ats, range, page) do
+  defp index_path(ats, range, search, sort_by, sort_dir, page) do
     params =
       %{}
       |> maybe_put("ats", ats)
       |> maybe_put("range", range)
+      |> maybe_put("search", search)
+      |> maybe_put("sort_by", sort_by, &(&1 != "started_at"))
+      |> maybe_put("sort_dir", sort_dir, &(&1 != "desc"))
       |> maybe_put("page", page, &(&1 > 1))
 
     ~p"/admin/scraping?#{params}"
@@ -223,9 +288,9 @@ defmodule WfeWeb.ScrapingDashboardLive do
           <div class="mb-8">
             <h1 class="text-2xl font-bold text-zinc-900">{@company_summary.company_name}</h1>
             <p class="text-sm text-zinc-500 mt-1">
-              ATS: {String.capitalize(@company_summary.ats)}
-              · First seen: {format_datetime(@company_summary.first_seen)}
-              · Last seen: {format_datetime(@company_summary.last_seen)}
+              ATS: {String.capitalize(@company_summary.ats)} · First seen: {format_datetime(
+                @company_summary.first_seen
+              )} · Last seen: {format_datetime(@company_summary.last_seen)}
             </p>
           </div>
 
@@ -263,9 +328,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
         <.pagination
           page={@page}
           total_pages={@total_pages}
-          path_fn={
-            fn p -> company_path(@detail_company_id, @company_outcome_filter, p) end
-          }
+          path_fn={fn p -> company_path(@detail_company_id, @company_outcome_filter, p) end}
         />
       </div>
     </div>
@@ -286,7 +349,16 @@ defmodule WfeWeb.ScrapingDashboardLive do
             </p>
           </div>
 
-          <form phx-change="filter" class="flex items-center gap-3">
+          <form phx-change="filter" class="flex flex-wrap items-center gap-3">
+            <input
+              type="text"
+              name="search"
+              value={@search}
+              placeholder="Search companies..."
+              phx-debounce="300"
+              class="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400 w-40"
+            />
+
             <select
               name="ats"
               class="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400"
@@ -304,9 +376,11 @@ defmodule WfeWeb.ScrapingDashboardLive do
             <div class="inline-flex rounded-lg overflow-hidden border border-zinc-300">
               <button
                 :for={{label, value} <- @time_ranges}
-                type="submit"
-                name="range"
-                value={value || ""}
+                type="button"
+                phx-click="filter"
+                phx-value-ats={@ats_filter || ""}
+                phx-value-range={value || ""}
+                phx-value-search={@search || ""}
                 class={[
                   "px-3 py-2 text-sm font-medium transition-colors border-r border-zinc-300 last:border-r-0",
                   if((@time_range || "") == (value || ""),
@@ -343,9 +417,6 @@ defmodule WfeWeb.ScrapingDashboardLive do
           <.ats_breakdown_card by_ats={@by_ats} />
         </div>
 
-        <%!-- Company Table --%>
-        <.company_table rows={@by_company} />
-
         <%!-- Recent Runs --%>
         <.runs_table
           runs={@recent_runs}
@@ -353,6 +424,9 @@ defmodule WfeWeb.ScrapingDashboardLive do
           total_pages={@total_pages}
           ats_filter={@ats_filter}
           time_range={@time_range}
+          search={@search}
+          sort_by={@sort_by}
+          sort_dir={@sort_dir}
         />
       </div>
     </div>
@@ -416,71 +490,14 @@ defmodule WfeWeb.ScrapingDashboardLive do
     """
   end
 
-  attr :rows, :list, required: true
-
-  defp company_table(assigns) do
-    ~H"""
-    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden mb-8">
-      <div class="px-6 py-4 border-b border-zinc-200">
-        <h2 class="text-lg font-semibold text-zinc-900">By Company</h2>
-      </div>
-      <table class="min-w-full divide-y divide-zinc-200">
-        <thead class="bg-zinc-50">
-          <tr>
-            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Company
-            </th>
-            <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              ATS
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Total
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Passed
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Rejected
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Pass Rate
-            </th>
-            <th class="px-4 py-3"></th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-zinc-200">
-          <tr :for={row <- @rows} class="hover:bg-zinc-50">
-            <td class="px-4 py-3 text-sm font-medium text-zinc-900">{row.company_name}</td>
-            <td class="px-4 py-3 text-sm">
-              <.ats_badge ats={row.ats} />
-            </td>
-            <td class="px-4 py-3 text-sm text-right tabular-nums">{row.total}</td>
-            <td class="px-4 py-3 text-sm text-right tabular-nums text-green-700">{row.passed}</td>
-            <td class="px-4 py-3 text-sm text-right tabular-nums text-red-700">{row.rejected}</td>
-            <td class="px-4 py-3 text-sm text-right">
-              <.pass_rate_bar rate={row.pass_rate} />
-            </td>
-            <td class="px-4 py-3 text-sm text-right">
-              <.link
-                navigate={~p"/admin/scraping/company/#{row.company_id}"}
-                class="text-zinc-600 hover:text-zinc-900 font-medium"
-              >
-                Details →
-              </.link>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <.empty_state :if={@rows == []} message="No filter events recorded yet. Run a scrape to generate data." />
-    </div>
-    """
-  end
-
   attr :runs, :list, required: true
   attr :page, :integer, required: true
   attr :total_pages, :integer, required: true
   attr :ats_filter, :string, default: nil
   attr :time_range, :string, default: nil
+  attr :search, :string, default: nil
+  attr :sort_by, :string, default: "started_at"
+  attr :sort_dir, :string, default: "desc"
 
   defp runs_table(assigns) do
     ~H"""
@@ -500,18 +517,25 @@ defmodule WfeWeb.ScrapingDashboardLive do
             <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
               ATS
             </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Total
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Passed
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Rejected
-            </th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Pass Rate
-            </th>
+            <.sortable_header field="total" label="Total" sort_by={@sort_by} sort_dir={@sort_dir} />
+            <.sortable_header
+              field="passed"
+              label="Passed"
+              sort_by={@sort_by}
+              sort_dir={@sort_dir}
+            />
+            <.sortable_header
+              field="rejected"
+              label="Rejected"
+              sort_by={@sort_by}
+              sort_dir={@sort_dir}
+            />
+            <.sortable_header
+              field="pass_rate"
+              label="Rate"
+              sort_by={@sort_by}
+              sort_dir={@sort_dir}
+            />
             <th class="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
               When
             </th>
@@ -549,8 +573,44 @@ defmodule WfeWeb.ScrapingDashboardLive do
     <.pagination
       page={@page}
       total_pages={@total_pages}
-      path_fn={fn p -> index_path(@ats_filter, @time_range, p) end}
+      path_fn={fn p -> index_path(@ats_filter, @time_range, @search, @sort_by, @sort_dir, p) end}
     />
+    """
+  end
+
+  attr :field, :string, required: true
+  attr :label, :string, required: true
+  attr :sort_by, :string, required: true
+  attr :sort_dir, :string, required: true
+
+  defp sortable_header(assigns) do
+    ~H"""
+    <th
+      class="px-4 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider cursor-pointer hover:bg-zinc-100 select-none"
+      phx-click="sort"
+      phx-value-field={@field}
+    >
+      <span class="inline-flex items-center gap-1">
+        {@label}
+        <.sort_indicator field={@field} sort_by={@sort_by} sort_dir={@sort_dir} />
+      </span>
+    </th>
+    """
+  end
+
+  defp sort_indicator(assigns) do
+    ~H"""
+    <span class={["text-zinc-400", @field != @sort_by && "invisible"]}>
+      <%= if @field == @sort_by do %>
+        <%= if @sort_dir == "asc" do %>
+          ↑
+        <% else %>
+          ↓
+        <% end %>
+      <% else %>
+        ↓
+      <% end %>
+    </span>
     """
   end
 
@@ -605,11 +665,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
             </td>
             <td class="px-4 py-3 text-sm">
               <%= if link = Map.get(event, :link) do %>
-                <a
-                  href={link}
-                  target="_blank"
-                  class="text-zinc-600 hover:text-zinc-900"
-                >
+                <a href={link} target="_blank" class="text-zinc-600 hover:text-zinc-900">
                   View ↗
                 </a>
               <% else %>

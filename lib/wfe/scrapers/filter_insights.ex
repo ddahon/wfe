@@ -9,6 +9,8 @@ defmodule Wfe.Scrapers.FilterInsights do
 
   @page_size 25
 
+  @sortable_fields ~w(total passed rejected pass_rate started_at)
+
   def page_size, do: @page_size
 
   def summary(opts \\ []) do
@@ -70,10 +72,14 @@ defmodule Wfe.Scrapers.FilterInsights do
 
   def recent_runs(opts \\ []) do
     page = Keyword.get(opts, :page, 1)
+    sort_by = Keyword.get(opts, :sort_by, :started_at)
+    sort_dir = Keyword.get(opts, :sort_dir, :desc)
+    search = Keyword.get(opts, :search)
 
     query =
       base_query(opts)
       |> join(:inner, [e], c in assoc(e, :company))
+      |> maybe_search(search)
       |> group_by([e, c], [e.run_id, e.ats, c.name, c.id])
       |> select([e, c], %{
         run_id: e.run_id,
@@ -85,17 +91,20 @@ defmodule Wfe.Scrapers.FilterInsights do
         total: count(e.id),
         started_at: min(e.inserted_at)
       })
-      |> order_by([e, c], desc: min(e.inserted_at))
+      |> apply_sort(sort_by, sort_dir)
 
-    total =
+    total_query =
       base_query(opts)
-      |> select([e], fragment("COUNT(DISTINCT ?)", e.run_id))
-      |> Repo.one() || 0
+      |> join(:inner, [e], c in assoc(e, :company))
+      |> maybe_search(search)
+      |> select([e, c], fragment("COUNT(DISTINCT ?)", e.run_id))
+
+    total = Repo.one(total_query) || 0
 
     runs =
       query
       |> limit(^@page_size)
-      |> offset(^((@page_size * (page - 1))))
+      |> offset(^(@page_size * (page - 1)))
       |> Repo.all()
       |> Enum.map(fn row ->
         Map.put(row, :pass_rate, if(row.total > 0, do: row.passed / row.total, else: 0.0))
@@ -221,4 +230,78 @@ defmodule Wfe.Scrapers.FilterInsights do
 
   defp maybe_since(query, nil), do: query
   defp maybe_since(query, %DateTime{} = dt), do: where(query, [e], e.inserted_at >= ^dt)
+
+  # Search uses the joined company table (binding index [e, c])
+  defp maybe_search(query, nil), do: query
+  defp maybe_search(query, ""), do: query
+
+  defp maybe_search(query, search) do
+    pattern = "%" <> String.replace(search, "%", "\\%") <> "%"
+    where(query, [e, c], fragment("? LIKE ? ESCAPE '\\'", c.name, ^pattern))
+  end
+
+  # Sort with validated field names
+  defp apply_sort(query, sort_by, sort_dir)
+       when sort_by in @sortable_fields or is_atom(sort_by) do
+    field = if is_binary(sort_by), do: String.to_existing_atom(sort_by), else: sort_by
+
+    case {field, sort_dir} do
+      {:total, :asc} ->
+        order_by(query, [e, c], asc: count(e.id))
+
+      {:total, _} ->
+        order_by(query, [e, c], desc: count(e.id))
+
+      {:passed, :asc} ->
+        order_by(query, [e, c],
+          asc: fragment("SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END)", e.outcome)
+        )
+
+      {:passed, _} ->
+        order_by(query, [e, c],
+          desc: fragment("SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END)", e.outcome)
+        )
+
+      {:rejected, :asc} ->
+        order_by(query, [e, c],
+          asc: fragment("SUM(CASE WHEN ? = 'rejected' THEN 1 ELSE 0 END)", e.outcome)
+        )
+
+      {:rejected, _} ->
+        order_by(query, [e, c],
+          desc: fragment("SUM(CASE WHEN ? = 'rejected' THEN 1 ELSE 0 END)", e.outcome)
+        )
+
+      {:pass_rate, :asc} ->
+        order_by(query, [e, c],
+          asc:
+            fragment(
+              "CAST(SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END) AS FLOAT) / MAX(COUNT(?), 1)",
+              e.outcome,
+              e.id
+            )
+        )
+
+      {:pass_rate, _} ->
+        order_by(query, [e, c],
+          desc:
+            fragment(
+              "CAST(SUM(CASE WHEN ? = 'passed' THEN 1 ELSE 0 END) AS FLOAT) / MAX(COUNT(?), 1)",
+              e.outcome,
+              e.id
+            )
+        )
+
+      {:started_at, :asc} ->
+        order_by(query, [e, c], asc: min(e.inserted_at))
+
+      {:started_at, _} ->
+        order_by(query, [e, c], desc: min(e.inserted_at))
+
+      _ ->
+        order_by(query, [e, c], desc: min(e.inserted_at))
+    end
+  end
+
+  defp apply_sort(query, _, _), do: order_by(query, [e, c], desc: min(e.inserted_at))
 end

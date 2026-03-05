@@ -109,15 +109,18 @@ defmodule WfeWeb.UIComponents do
     "ats_hint_remote" => {"bg-green-50 text-green-700 border-green-200", "ATS: Remote"},
     "ats_hint_onsite" => {"bg-red-50 text-red-700 border-red-200", "ATS: On-site"},
     "heuristic_pass" => {"bg-emerald-50 text-emerald-700 border-emerald-200", "Heuristic: Pass"},
-    "heuristic_reject" =>
-      {"bg-orange-50 text-orange-700 border-orange-200", "Heuristic: Reject"}
+    "heuristic_reject" => {"bg-orange-50 text-orange-700 border-orange-200", "Heuristic: Reject"}
   }
 
   attr :reason, :string, required: true
 
   def reason_badge(assigns) do
     {style, label} =
-      Map.get(@reason_styles, assigns.reason, {"bg-zinc-50 text-zinc-700 border-zinc-200", assigns.reason})
+      Map.get(
+        @reason_styles,
+        assigns.reason,
+        {"bg-zinc-50 text-zinc-700 border-zinc-200", assigns.reason}
+      )
 
     assigns = assign(assigns, style: style, label: label)
 
@@ -144,7 +147,7 @@ defmodule WfeWeb.UIComponents do
   attr :color, :string, default: "indigo"
 
   def bar_stat(assigns) do
-    pct = if assigns.total > 0, do: assigns.count / assigns.total * 100, else: 0
+    pct = if assigns.total > 0, do: assigns.count / assigns.total * 100.0, else: 0.0
     assigns = assign(assigns, :pct, pct)
 
     ~H"""
