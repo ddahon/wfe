@@ -11,8 +11,9 @@ defmodule Wfe.Workers.ScrapeOrchestrator do
   require Logger
 
   @impl true
-  def perform(_job) do
-    candidates = Companies.list_scrape_candidates()
+  def perform(%Oban.Job{args: args}) do
+    opts = if key = args["threshold_hours"], do: [threshold_hours: key], else: []
+    candidates = Companies.list_scrape_candidates(opts)
     Logger.info("[Orchestrator] Found #{length(candidates)} candidates")
 
     # Oban.insert_all/1 bypasses :unique; insert/1 respects it.

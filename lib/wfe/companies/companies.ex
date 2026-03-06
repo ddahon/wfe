@@ -15,9 +15,14 @@ defmodule Wfe.Companies do
 
   No longer filters by scrape_status — Oban's unique constraint
   already prevents duplicate in-flight jobs. Select purely on staleness.
+
+  Options:
+    * `:threshold_hours` — consider companies due if last scraped more than
+      this many hours ago (default 6). Use 0 to include all companies.
   """
-  def list_scrape_candidates do
-    threshold = DateTime.add(DateTime.utc_now(), -6, :hour)
+  def list_scrape_candidates(opts \\ []) do
+    hours = Keyword.get(opts, :threshold_hours, 6)
+    threshold = DateTime.add(DateTime.utc_now(), -hours, :hour)
 
     Company
     |> where([c], c.ats in @valid_ats and not is_nil(c.ats_identifier))
