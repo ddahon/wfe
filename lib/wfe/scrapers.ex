@@ -1,15 +1,17 @@
 defmodule Wfe.Scrapers do
   @moduledoc """
-  Dispatches to the correct ATS scraper and applies remote-only filtering.
+  Dispatches to the correct ATS scraper and applies remote + region filtering.
 
-  Filtering is two-tiered:
-    1. ATS-provided hints (optional `remote_hint/1` callback on raw payload)
-    2. Heuristic fallback on parsed fields (`Wfe.Jobs.RemoteFilter`)
+  Three-stage funnel:
+    1. ATS hint          — scraper's `remote_hint/1` on the raw payload
+    2. Remote heuristics — `Wfe.Jobs.RemoteFilter` on parsed fields
+    3. Region filter     — `Wfe.Jobs.RegionFilter` drops single-country
+                           roles and normalises `region`
 
-  Every decision is recorded in `filter_events` for auditing.
+  Every job's final outcome is logged to `filter_events`.
   """
 
-  alias Wfe.Jobs.RemoteFilter
+  alias Wfe.Jobs.{RemoteFilter, RegionFilter}
   alias Wfe.Scrapers.FilterAudit
 
   require Logger
@@ -24,15 +26,11 @@ defmodule Wfe.Scrapers do
 
   def supported_ats, do: Map.keys(@scrapers)
 
-  @doc """
-  Fetch, filter for remote, and parse jobs for a company.
-  Returns `{:ok, [normalized_job_map]}` or `{:error, reason}`.
-  """
   def fetch_jobs(%{ats: ats} = company) do
     case Map.fetch(@scrapers, ats) do
       {:ok, mod} ->
         with {:ok, pairs} <- mod.fetch_jobs(company) do
-          {:ok, filter_remote(mod, company, pairs)}
+          {:ok, filter_pipeline(mod, company, pairs)}
         end
 
       :error ->
@@ -40,64 +38,66 @@ defmodule Wfe.Scrapers do
     end
   end
 
-  # --- Filtering with Audit -------------------------------------------------
+  # ──────────────────────────────────────────────────────────────────────────
+  # Filter pipeline
+  # ──────────────────────────────────────────────────────────────────────────
 
-  defp filter_remote(mod, company, pairs) do
+  defp filter_pipeline(mod, company, pairs) do
     run_id = Ecto.UUID.generate()
 
-    # 1. Bucket by ATS hint: true / false / nil
-    by_hint =
-      Enum.group_by(pairs, fn {raw, _parsed} -> apply_hint(mod, raw) end)
+    # ── Stage 1: ATS hint ────────────────────────────────────────────────
+    by_hint = Enum.group_by(pairs, fn {raw, _} -> apply_hint(mod, raw) end)
 
-    # 2. Build decisions for ATS-hinted jobs
-    ats_remote_decisions =
-      by_hint
-      |> Map.get(true, [])
-      |> Enum.map(fn {_raw, parsed} -> {parsed, "passed", "ats_hint_remote"} end)
+    ats_remote = parsed(by_hint, true)
+    ats_onsite = parsed(by_hint, false)
+    ats_unknown = parsed(by_hint, nil)
 
-    ats_onsite_decisions =
-      by_hint
-      |> Map.get(false, [])
-      |> Enum.map(fn {_raw, parsed} -> {parsed, "rejected", "ats_hint_onsite"} end)
+    # ── Stage 2: Remote heuristics on undecided ─────────────────────────
+    {heur_passed, heur_rejected} = RemoteFilter.apply_with_rejects(ats_unknown)
 
-    # 3. Run heuristics on undecided jobs
-    unknown_parsed = by_hint |> Map.get(nil, []) |> Enum.map(&elem(&1, 1))
-    {heuristic_passed, heuristic_rejected} = RemoteFilter.apply_with_rejects(unknown_parsed)
+    # ── Stage 3: Region classification on all remote survivors ──────────
+    # Runs on (ATS-remote ∪ heuristic-pass). Single-country roles die here;
+    # survivors get a normalised :region field.
+    remote_survivors = ats_remote ++ heur_passed
+    {region_kept, region_rejected} = RegionFilter.apply(remote_survivors)
 
-    heuristic_pass_decisions =
-      Enum.map(heuristic_passed, fn parsed -> {parsed, "passed", "heuristic_pass"} end)
+    # ── Audit: one final decision per job ────────────────────────────────
+    # A job that passed stage 1 but failed stage 3 is recorded as a
+    # region rejection — that's the interesting bit for tuning.
+    decisions =
+      Enum.map(ats_onsite, &{&1, "rejected", "ats_hint_onsite"}) ++
+        Enum.map(heur_rejected, &{&1, "rejected", "heuristic_reject"}) ++
+        Enum.map(region_rejected, fn {job, reason} -> {job, "rejected", reason} end) ++
+        Enum.map(region_kept, fn job -> {job, "passed", "region:#{job[:region]}"} end)
 
-    heuristic_reject_decisions =
-      Enum.map(heuristic_rejected, fn parsed -> {parsed, "rejected", "heuristic_reject"} end)
-
-    # 4. Collect all decisions and persist
-    all_decisions =
-      ats_remote_decisions ++
-        ats_onsite_decisions ++
-        heuristic_pass_decisions ++
-        heuristic_reject_decisions
-
-    # Persist asynchronously so it doesn't slow down the pipeline.
-    # If you prefer guaranteed writes, remove the Task wrapper.
-    Task.start(fn ->
-      FilterAudit.record(company, all_decisions, run_id)
-    end)
-
-    # 5. Return only the kept jobs
-    kept_parsed = Enum.map(ats_remote_decisions, &elem(&1, 0)) ++ heuristic_passed
+    Task.start(fn -> FilterAudit.record(company, decisions, run_id) end)
 
     Logger.debug("""
     [Scrapers] #{company.name} (run #{run_id}): #{length(pairs)} fetched
-      #{length(ats_remote_decisions)} ATS-flagged remote
-      #{length(ats_onsite_decisions)} ATS-flagged on-site
-      #{length(heuristic_passed)}/#{length(unknown_parsed)} passed heuristics
-      #{length(kept_parsed)} kept
+      stage 1: #{length(ats_onsite)} rejected by ATS hint, #{length(ats_unknown)} undecided
+      stage 2: #{length(heur_rejected)}/#{length(ats_unknown)} rejected by heuristics
+      stage 3: #{length(region_rejected)}/#{length(remote_survivors)} rejected by region filter
+      → #{length(region_kept)} kept #{region_breakdown(region_kept)}
     """)
 
-    kept_parsed
+    # Drop the helper atom before handing off to upsert — schema doesn't
+    # know about it.
+    Enum.map(region_kept, &Map.delete(&1, :region_atom))
   end
+
+  defp parsed(grouped, key), do: grouped |> Map.get(key, []) |> Enum.map(&elem(&1, 1))
 
   defp apply_hint(mod, raw) do
     if function_exported?(mod, :remote_hint, 1), do: mod.remote_hint(raw), else: nil
+  end
+
+  # "(Global: 4, EMEA: 2, APAC: 1)" — nice to have in logs.
+  defp region_breakdown([]), do: ""
+
+  defp region_breakdown(jobs) do
+    jobs
+    |> Enum.frequencies_by(& &1[:region])
+    |> Enum.map_join(", ", fn {r, n} -> "#{r}: #{n}" end)
+    |> then(&"(#{&1})")
   end
 end

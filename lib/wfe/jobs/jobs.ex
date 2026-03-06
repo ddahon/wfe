@@ -59,7 +59,7 @@ defmodule Wfe.Jobs do
     Repo.insert_all(Job, entries,
       on_conflict:
         {:replace,
-         [:title, :description, :location, :link, :posted_at, :content_hash, :updated_at]},
+         [:title, :description, :location, :region, :link, :posted_at, :content_hash, :updated_at]},
       conflict_target: [:company_id, :external_id]
     )
   end
