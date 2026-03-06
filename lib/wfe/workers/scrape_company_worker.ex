@@ -8,8 +8,6 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
   """
   use Oban.Worker,
     max_attempts: 3,
-    # Dedupe on args+queue as long as *any* matching job is in-flight,
-    # regardless of how long ago it was inserted.
     unique: [
       period: :infinity,
       fields: [:args, :queue],
@@ -29,14 +27,33 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
 
     Logger.info("[Scraper] #{company.name} (#{company.ats}) — attempt #{attempt}/#{max}")
 
-    with {:ok, jobs} <- Scrapers.fetch_jobs(company) do
-      {count, _} = Jobs.upsert_jobs(company, jobs)
-      Companies.touch_last_scraped(company)
-      Logger.info("[Scraper] #{company.name}: upserted #{count} jobs")
-      :ok
-    end
+    case Scrapers.fetch_jobs(company) do
+      {:ok, jobs} ->
+        {count, _} = Jobs.upsert_jobs(company, jobs)
+        Companies.touch_last_scraped(company)
+        Logger.info("[Scraper] #{company.name}: upserted #{count} jobs")
+        :ok
 
-    # {:error, reason} flows out → Oban retries with backoff,
-    # telemetry handler feeds the circuit breaker.
+      # 404 = stale/wrong board URL. Retrying won't help; discard immediately
+      # so we don't waste attempts and don't trip the circuit breaker.
+      {:error, reason} = err ->
+        if not_found?(reason) do
+          Logger.info("[Scraper] #{company.name}: 404 — discarding, no retry")
+          {:discard, reason}
+        else
+          err
+        end
+    end
   end
+
+  # Shapes `Scrapers.fetch_jobs/1` might return for a missing board.
+  # Keep this in sync with whatever your HTTP layer actually emits.
+  defp not_found?(:not_found), do: true
+  defp not_found?({:http_error, 404}), do: true
+  defp not_found?({:http_error, 404, _}), do: true
+  defp not_found?({:http, 404}), do: true
+  defp not_found?({:http, 404, _}), do: true
+  defp not_found?(%{status: 404}), do: true
+  defp not_found?(r) when is_binary(r), do: String.contains?(r, "404")
+  defp not_found?(_), do: false
 end
