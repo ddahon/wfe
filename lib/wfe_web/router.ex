@@ -1,6 +1,8 @@
 defmodule WfeWeb.Router do
   use WfeWeb, :router
 
+  import Oban.Web.Router
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -39,6 +41,12 @@ defmodule WfeWeb.Router do
       live "/scraping", ScrapingDashboardLive, :index
       live "/scraping/run/:run_id", ScrapingDashboardLive, :run_detail
       live "/scraping/company/:company_id", ScrapingDashboardLive, :company_detail
+    end
+
+    scope "/" do
+      pipe_through :browser
+
+      oban_dashboard("/oban")
     end
   end
 end
