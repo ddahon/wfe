@@ -2,11 +2,10 @@ defmodule Wfe.Workers.ScrapeTelemetry do
   @moduledoc """
   Telemetry handler for ScrapeCompanyWorker jobs.
 
-  Handles cross-cutting concerns that used to live inline in perform/1:
-    * Circuit-breaker success/failure tracking
-    * Persisting the final error to the company after all retries exhaust
-
-  Attach once at boot (see Wfe.Application).
+    * Circuit breaker: counts transient failures only. Discards are the
+      worker's explicit "this isn't going to fix itself" signal, so they
+      don't count toward the threshold.
+    * Final-failure persistence: on last attempt OR on discard.
   """
 
   alias Wfe.Companies
@@ -23,12 +22,15 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   # --- Event router --------------------------------------------------------
 
-  # Only intercept our scrape worker; let everything else pass.
-  def handle_event([:oban, :job, :stop], _meas, %{worker: @worker} = meta, _cfg) do
+  def handle_event([:oban, :job, :stop], _m, %{worker: @worker, state: :success} = meta, _) do
     handle_success(meta)
   end
 
-  def handle_event([:oban, :job, :exception], _meas, %{worker: @worker} = meta, _cfg) do
+  def handle_event([:oban, :job, :stop], _m, %{worker: @worker} = meta, _) do
+    handle_failure(meta)
+  end
+
+  def handle_event([:oban, :job, :exception], _m, %{worker: @worker} = meta, _) do
     handle_failure(meta)
   end
 
@@ -41,10 +43,18 @@ defmodule Wfe.Workers.ScrapeTelemetry do
   end
 
   defp handle_failure(%{queue: queue, attempt: attempt, max_attempts: max} = meta) do
-    CircuitBreaker.record_failure(queue)
+    reason = raw_reason(meta)
+    discarded? = Map.get(meta, :state) == :discard
 
-    if attempt >= max do
-      persist_failure(meta, extract_reason(meta))
+    if discarded? do
+      Logger.info("[ScrapeTelemetry] #{queue}: discarded — skipping circuit breaker")
+    else
+      CircuitBreaker.record_failure(queue)
+    end
+
+    # Persist when retries are exhausted OR the worker gave up early.
+    if discarded? or attempt >= max do
+      persist_failure(meta, format_reason(reason))
     end
   end
 
@@ -63,7 +73,12 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   defp persist_failure(_meta, _reason), do: :ok
 
-  # Exception events carry :error; normalize to a printable string.
-  defp extract_reason(%{error: reason}), do: inspect(reason)
-  defp extract_reason(_), do: "unknown"
+  defp raw_reason(%{result: {:error, reason}}), do: reason
+  defp raw_reason(%{result: {:discard, reason}}), do: reason
+  defp raw_reason(%{error: reason}), do: reason
+  defp raw_reason(%{reason: reason}), do: reason
+  defp raw_reason(_), do: :unknown
+
+  defp format_reason(r) when is_binary(r), do: r
+  defp format_reason(r), do: inspect(r)
 end

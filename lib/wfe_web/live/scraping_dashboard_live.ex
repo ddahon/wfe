@@ -12,6 +12,11 @@ defmodule WfeWeb.ScrapingDashboardLive do
     {"30d", "30d"}
   ]
 
+  @tabs [
+    {"filters", "Filter Data"},
+    {"errors", "Error Breakdown"}
+  ]
+
   # ── Mount & Params ─────────────────────────────────────────────────────
 
   @impl true
@@ -21,7 +26,8 @@ defmodule WfeWeb.ScrapingDashboardLive do
     {:ok,
      assign(socket,
        page_title: "Scraping Dashboard",
-       time_ranges: @time_ranges
+       time_ranges: @time_ranges,
+       tabs: @tabs
      )}
   end
 
@@ -37,6 +43,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
     sort_by = Map.get(params, "sort_by", "started_at")
     sort_dir = Map.get(params, "sort_dir", "desc")
     page = parse_page(params)
+    active_tab = Map.get(params, "tab", "filters")
 
     socket
     |> assign(
@@ -46,7 +53,8 @@ defmodule WfeWeb.ScrapingDashboardLive do
       search: search,
       sort_by: sort_by,
       sort_dir: sort_dir,
-      page: page
+      page: page,
+      active_tab: active_tab
     )
     |> load_overview_data()
   end
@@ -99,7 +107,32 @@ defmodule WfeWeb.ScrapingDashboardLive do
     range = if range == "", do: nil, else: range
     search = if search == "", do: nil, else: search
 
-    path = index_path(ats, range, search, socket.assigns.sort_by, socket.assigns.sort_dir, 1)
+    path =
+      index_path(
+        ats,
+        range,
+        search,
+        socket.assigns.sort_by,
+        socket.assigns.sort_dir,
+        1,
+        socket.assigns.active_tab
+      )
+
+    {:noreply, push_patch(socket, to: path)}
+  end
+
+  def handle_event("switch_tab", %{"tab" => tab}, socket) do
+    path =
+      index_path(
+        socket.assigns.ats_filter,
+        socket.assigns.time_range,
+        socket.assigns.search,
+        socket.assigns.sort_by,
+        socket.assigns.sort_dir,
+        1,
+        tab
+      )
+
     {:noreply, push_patch(socket, to: path)}
   end
 
@@ -119,7 +152,8 @@ defmodule WfeWeb.ScrapingDashboardLive do
         socket.assigns.search,
         sort_by,
         sort_dir,
-        1
+        1,
+        socket.assigns.active_tab
       )
 
     {:noreply, push_patch(socket, to: path)}
@@ -161,6 +195,10 @@ defmodule WfeWeb.ScrapingDashboardLive do
     {runs, runs_total} = FilterInsights.recent_runs(run_opts)
     runs_total_pages = calc_total_pages(runs_total)
 
+    # Load error breakdown data
+    errors_by_type = FilterInsights.failed_jobs_by_error(base_opts)
+    total_failed = FilterInsights.total_failed_count(base_opts)
+
     assign(socket,
       summary: FilterInsights.summary(base_opts),
       totals: FilterInsights.total_counts(base_opts),
@@ -169,7 +207,9 @@ defmodule WfeWeb.ScrapingDashboardLive do
       by_ats: FilterInsights.by_ats(base_opts),
       recent_runs: runs,
       runs_total: runs_total,
-      total_pages: runs_total_pages
+      total_pages: runs_total_pages,
+      errors_by_type: errors_by_type,
+      total_failed: total_failed
     )
   end
 
@@ -197,7 +237,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
 
   # ── Path Builders ──────────────────────────────────────────────────────
 
-  defp index_path(ats, range, search, sort_by, sort_dir, page) do
+  defp index_path(ats, range, search, sort_by, sort_dir, page, tab \\ "filters") do
     params =
       %{}
       |> maybe_put("ats", ats)
@@ -206,6 +246,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
       |> maybe_put("sort_by", sort_by, &(&1 != "started_at"))
       |> maybe_put("sort_dir", sort_dir, &(&1 != "desc"))
       |> maybe_put("page", page, &(&1 > 1))
+      |> maybe_put("tab", tab, &(&1 != "filters"))
 
     ~p"/admin/scraping?#{params}"
   end
@@ -396,13 +437,14 @@ defmodule WfeWeb.ScrapingDashboardLive do
         </div>
 
         <%!-- Overview Stats --%>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
           <.stat_card
             label="Total Evaluated"
             value={Map.get(@totals, "passed", 0) + Map.get(@totals, "rejected", 0)}
           />
           <.stat_card label="Passed" value={Map.get(@totals, "passed", 0)} color="green" />
           <.stat_card label="Rejected" value={Map.get(@totals, "rejected", 0)} color="red" />
+          <.stat_card label="Failed Jobs" value={@total_failed} color="amber" />
           <.stat_card
             label="Pass Rate"
             value={format_percent_float(@pass_rate)}
@@ -411,29 +453,139 @@ defmodule WfeWeb.ScrapingDashboardLive do
           <.stat_card label="Companies" value={length(@by_company)} color="purple" />
         </div>
 
-        <%!-- Breakdown Cards --%>
-        <div class="grid md:grid-cols-2 gap-6 mb-8">
-          <.filter_breakdown_card summary={@summary} totals={@totals} />
-          <.ats_breakdown_card by_ats={@by_ats} />
+        <%!-- Tab Navigation --%>
+        <div class="border-b border-zinc-200 mb-6">
+          <nav class="-mb-px flex space-x-8">
+            <button
+              :for={{tab_id, tab_label} <- @tabs}
+              phx-click="switch_tab"
+              phx-value-tab={tab_id}
+              class={[
+                "py-4 px-1 border-b-2 font-medium text-sm transition-colors",
+                if(@active_tab == tab_id,
+                  do: "border-zinc-900 text-zinc-900",
+                  else: "border-transparent text-zinc-500 hover:text-zinc-700 hover:border-zinc-300"
+                )
+              ]}
+            >
+              {tab_label}
+            </button>
+          </nav>
         </div>
 
-        <%!-- Recent Runs --%>
-        <.runs_table
-          runs={@recent_runs}
-          page={@page}
-          total_pages={@total_pages}
-          ats_filter={@ats_filter}
-          time_range={@time_range}
-          search={@search}
-          sort_by={@sort_by}
-          sort_dir={@sort_dir}
-        />
+        <%!-- Tab Content --%>
+        <%= if @active_tab == "filters" do %>
+          <%!-- Breakdown Cards --%>
+          <div class="grid md:grid-cols-2 gap-6 mb-8">
+            <.filter_breakdown_card summary={@summary} totals={@totals} />
+            <.ats_breakdown_card by_ats={@by_ats} />
+          </div>
+
+          <%!-- Recent Runs --%>
+          <.runs_table
+            runs={@recent_runs}
+            page={@page}
+            total_pages={@total_pages}
+            ats_filter={@ats_filter}
+            time_range={@time_range}
+            search={@search}
+            sort_by={@sort_by}
+            sort_dir={@sort_dir}
+            active_tab={@active_tab}
+          />
+        <% else %>
+          <%!-- Error Breakdown Tab --%>
+          <.error_breakdown_card errors_by_type={@errors_by_type} total_failed={@total_failed} />
+        <% end %>
       </div>
     </div>
     """
   end
 
   # ── Private Components ─────────────────────────────────────────────────
+
+  defp error_breakdown_card(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-200 bg-white overflow-hidden">
+      <div class="px-6 py-4 border-b border-zinc-200">
+        <h2 class="text-lg font-semibold text-zinc-900">Failed Jobs by Error</h2>
+        <p class="text-sm text-zinc-500 mt-1">
+          Total failed: {@total_failed} companies
+        </p>
+      </div>
+
+      <div :if={@errors_by_type == []} class="p-6">
+        <p class="text-zinc-500 text-sm">No failed jobs recorded.</p>
+      </div>
+
+      <table :if={@errors_by_type != []} class="min-w-full divide-y divide-zinc-200">
+        <thead class="bg-zinc-50">
+          <tr>
+            <th class="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Error
+            </th>
+            <th class="px-6 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Count
+            </th>
+            <th class="px-6 py-3 text-right text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Percentage
+            </th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-zinc-200">
+          <tr :for={error <- @errors_by_type} class="hover:bg-zinc-50">
+            <td class="px-6 py-4">
+              <div class="flex items-center gap-2">
+                <.error_severity_indicator error={error.error} />
+                <span class="text-sm text-zinc-900 font-mono truncate max-w-md" title={error.error}>
+                  {truncate_error(error.error)}
+                </span>
+              </div>
+            </td>
+            <td class="px-6 py-4 text-sm text-right tabular-nums text-zinc-900 font-medium">
+              {error.count}
+            </td>
+            <td class="px-6 py-4 text-sm text-right tabular-nums text-zinc-500">
+              {format_percent(error.count, @total_failed)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  defp error_severity_indicator(assigns) do
+    color =
+      cond do
+        String.contains?(String.downcase(assigns.error || ""), "timeout") -> "amber"
+        String.contains?(String.downcase(assigns.error || ""), "404") -> "zinc"
+        String.contains?(String.downcase(assigns.error || ""), "500") -> "red"
+        String.contains?(String.downcase(assigns.error || ""), "rate") -> "orange"
+        true -> "red"
+      end
+
+    assigns = assign(assigns, :color, color)
+
+    ~H"""
+    <span class={[
+      "inline-block w-2 h-2 rounded-full",
+      @color == "amber" && "bg-amber-500",
+      @color == "zinc" && "bg-zinc-400",
+      @color == "red" && "bg-red-500",
+      @color == "orange" && "bg-orange-500"
+    ]}>
+    </span>
+    """
+  end
+
+  defp truncate_error(nil), do: "Unknown error"
+
+  defp truncate_error(error) when byte_size(error) > 80 do
+    String.slice(error, 0, 77) <> "..."
+  end
+
+  defp truncate_error(error), do: error
 
   defp filter_breakdown_card(assigns) do
     total = Map.get(assigns.totals, "passed", 0) + Map.get(assigns.totals, "rejected", 0)
@@ -498,6 +650,7 @@ defmodule WfeWeb.ScrapingDashboardLive do
   attr :search, :string, default: nil
   attr :sort_by, :string, default: "started_at"
   attr :sort_dir, :string, default: "desc"
+  attr :active_tab, :string, default: "filters"
 
   defp runs_table(assigns) do
     ~H"""
@@ -573,7 +726,9 @@ defmodule WfeWeb.ScrapingDashboardLive do
     <.pagination
       page={@page}
       total_pages={@total_pages}
-      path_fn={fn p -> index_path(@ats_filter, @time_range, @search, @sort_by, @sort_dir, p) end}
+      path_fn={
+        fn p -> index_path(@ats_filter, @time_range, @search, @sort_by, @sort_dir, p, @active_tab) end
+      }
     />
     """
   end
