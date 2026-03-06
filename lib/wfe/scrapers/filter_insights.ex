@@ -6,6 +6,7 @@ defmodule Wfe.Scrapers.FilterInsights do
   import Ecto.Query
   alias Wfe.Repo
   alias Wfe.Scrapers.FilterEvent
+  alias Wfe.Companies.Company
 
   @page_size 25
 
@@ -304,4 +305,64 @@ defmodule Wfe.Scrapers.FilterInsights do
   end
 
   defp apply_sort(query, _, _), do: order_by(query, [e, c], desc: min(e.inserted_at))
+
+  @doc """
+  Returns a breakdown of failed scrape jobs grouped by error reason.
+  """
+  def failed_jobs_by_error(opts \\ []) do
+    since = Keyword.get(opts, :since)
+    ats = Keyword.get(opts, :ats)
+
+    query =
+      from c in Company,
+        where: not is_nil(c.last_scrape_error),
+        group_by: c.last_scrape_error,
+        select: %{
+          error: c.last_scrape_error,
+          count: count(c.id)
+        },
+        order_by: [desc: count(c.id)]
+
+    query =
+      if since do
+        from c in query, where: c.updated_at >= ^since
+      else
+        query
+      end
+
+    query =
+      if ats && ats != "" do
+        from c in query, where: c.ats == ^ats
+      else
+        query
+      end
+
+    Repo.all(query)
+  end
+
+  def total_failed_count(opts \\ []) do
+    since = Keyword.get(opts, :since)
+    ats = Keyword.get(opts, :ats)
+
+    query =
+      from c in Company,
+        where: not is_nil(c.last_scrape_error),
+        select: count(c.id)
+
+    query =
+      if since do
+        from c in query, where: c.updated_at >= ^since
+      else
+        query
+      end
+
+    query =
+      if ats && ats != "" do
+        from c in query, where: c.ats == ^ats
+      else
+        query
+      end
+
+    Repo.one(query) || 0
+  end
 end

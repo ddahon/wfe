@@ -23,7 +23,6 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   # --- Event router --------------------------------------------------------
 
-  # Only intercept our scrape worker; let everything else pass.
   def handle_event([:oban, :job, :stop], _meas, %{worker: @worker} = meta, _cfg) do
     handle_success(meta)
   end
@@ -41,7 +40,11 @@ defmodule Wfe.Workers.ScrapeTelemetry do
   end
 
   defp handle_failure(%{queue: queue, attempt: attempt, max_attempts: max} = meta) do
-    CircuitBreaker.record_failure(queue)
+    # Don't count 404s as circuit breaker failures - these are expected
+    # when companies remove their job boards
+    unless is_404_error?(meta) do
+      CircuitBreaker.record_failure(queue)
+    end
 
     if attempt >= max do
       persist_failure(meta, extract_reason(meta))
@@ -63,7 +66,27 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   defp persist_failure(_meta, _reason), do: :ok
 
-  # Exception events carry :error; normalize to a printable string.
   defp extract_reason(%{error: reason}), do: inspect(reason)
   defp extract_reason(_), do: "unknown"
+
+  defp is_404_error?(meta) do
+    case meta do
+      %{error: %{status: 404}} ->
+        true
+
+      %{error: {:error, :not_found}} ->
+        true
+
+      %{error: :not_found} ->
+        true
+
+      %{kind: :error, error: %{__exception__: true} = exception} ->
+        message = Exception.message(exception) |> String.downcase()
+        String.contains?(message, "404") or String.contains?(message, "not found")
+
+      _ ->
+        reason = extract_reason(meta) |> String.downcase()
+        String.contains?(reason, "404") or String.contains?(reason, "not_found")
+    end
+  end
 end
