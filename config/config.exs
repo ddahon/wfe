@@ -45,7 +45,11 @@ config :wfe, :companies_finder,
 
 # Per-ATS queues (concurrency 1 = serial calls per ATS = rate limiter).
 # Must match Company.valid_ats/0; ConfigCheck.validate!() at boot catches mismatches.
-ats_queues = [greenhouse: 1, lever: 1, ashby: 1, workable: 1, recruitee: 1]
+ats_queues = [
+  greenhouse: 1, lever: 1, ashby: 1, workable: 1, recruitee: 1,
+  teamtailor: 1, smartrecruiters: 1, rippling: 1, pinpoint: 1,
+  jobvite: 1, dover: 1, breezy: 1, bamboohr: 1
+]
 
 config :wfe, Oban,
   # Required for SQLite

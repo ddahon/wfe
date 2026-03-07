@@ -21,7 +21,15 @@ defmodule Wfe.Scrapers do
     "lever" => Wfe.Scrapers.Lever,
     "ashby" => Wfe.Scrapers.Ashby,
     "workable" => Wfe.Scrapers.Workable,
-    "recruitee" => Wfe.Scrapers.Recruitee
+    "recruitee" => Wfe.Scrapers.Recruitee,
+    "teamtailor" => Wfe.Scrapers.Teamtailor,
+    "smartrecruiters" => Wfe.Scrapers.SmartRecruiters,
+    "rippling" => Wfe.Scrapers.Rippling,
+    "pinpoint" => Wfe.Scrapers.Pinpoint,
+    "jobvite" => Wfe.Scrapers.Jobvite,
+    "dover" => Wfe.Scrapers.Dover,
+    "breezy" => Wfe.Scrapers.Breezy,
+    "bamboohr" => Wfe.Scrapers.BambooHR
   }
 
   def supported_ats, do: Map.keys(@scrapers)

@@ -16,7 +16,10 @@ defmodule Wfe.Companies.Company do
     timestamps(type: :utc_datetime)
   end
 
-  @valid_ats ~w(greenhouse lever ashby workable recruitee)
+  @valid_ats ~w(
+    greenhouse lever ashby workable recruitee
+    teamtailor smartrecruiters rippling pinpoint jobvite dover breezy bamboohr
+  )
 
   def valid_ats, do: @valid_ats
 
