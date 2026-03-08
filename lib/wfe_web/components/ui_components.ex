@@ -5,6 +5,8 @@ defmodule WfeWeb.UIComponents do
 
   use Phoenix.Component
 
+  alias WfeWeb.Theme
+
   # ── Pagination ─────────────────────────────────────────────────────────
 
   attr :page, :integer, required: true
@@ -13,23 +15,23 @@ defmodule WfeWeb.UIComponents do
 
   def pagination(assigns) do
     ~H"""
-    <div :if={@total_pages > 1} class="mt-8 flex items-center justify-center gap-4">
+    <div :if={@total_pages > 1} class="mt-8 flex flex-wrap items-center justify-center gap-2 sm:gap-4">
       <.link
         :if={@page > 1}
         patch={@path_fn.(@page - 1)}
-        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
+        class={Theme.pagination_btn()}
       >
-        ← Previous
+        ← <span class="hidden sm:inline">Previous</span><span class="sm:hidden">Prev</span>
       </.link>
 
-      <span class="text-sm text-zinc-600">
+      <span class={["text-sm", Theme.pagination_text()]}>
         Page {@page} of {@total_pages}
       </span>
 
       <.link
         :if={@page < @total_pages}
         patch={@path_fn.(@page + 1)}
-        class="rounded border border-zinc-300 bg-white px-4 py-2 text-zinc-700 hover:bg-zinc-100 transition-colors"
+        class={Theme.pagination_btn()}
       >
         Next →
       </.link>
@@ -52,8 +54,8 @@ defmodule WfeWeb.UIComponents do
 
   def stat_card(assigns) do
     ~H"""
-    <div class="rounded-lg border border-zinc-200 bg-white p-4">
-      <dt class="text-sm font-medium text-zinc-500 truncate">{@label}</dt>
+    <div class={["rounded-lg border p-4", Theme.card_surface(), Theme.card_border()]}>
+      <dt class={["text-sm font-medium truncate", Theme.text_muted()]}>{@label}</dt>
       <dd class={["mt-1 text-2xl font-bold tabular-nums", stat_text_color(@color)]}>
         {@value}
       </dd>
@@ -61,8 +63,8 @@ defmodule WfeWeb.UIComponents do
     """
   end
 
-  defp stat_text_color(nil), do: "text-zinc-900"
-  defp stat_text_color(c), do: Map.get(@stat_colors, c, "text-zinc-900")
+  defp stat_text_color(nil), do: Theme.text_heading()
+  defp stat_text_color(c), do: Map.get(@stat_colors, c, Theme.text_heading())
 
   # ── Badges ─────────────────────────────────────────────────────────────
 
@@ -109,7 +111,8 @@ defmodule WfeWeb.UIComponents do
     "ats_hint_remote" => {"bg-green-50 text-green-700 border-green-200", "ATS: Remote"},
     "ats_hint_onsite" => {"bg-red-50 text-red-700 border-red-200", "ATS: On-site"},
     "heuristic_pass" => {"bg-emerald-50 text-emerald-700 border-emerald-200", "Heuristic: Pass"},
-    "heuristic_reject" => {"bg-orange-50 text-orange-700 border-orange-200", "Heuristic: Reject"}
+    "heuristic_reject" =>
+      {"bg-orange-50 text-orange-700 border-orange-200", "Heuristic: Reject"}
   }
 
   attr :reason, :string, required: true
@@ -153,8 +156,8 @@ defmodule WfeWeb.UIComponents do
     ~H"""
     <div>
       <div class="flex justify-between text-sm mb-1">
-        <span class="text-zinc-700">{@label}</span>
-        <span class="font-mono text-zinc-900">{@count}</span>
+        <span class={Theme.text_body()}>{@label}</span>
+        <span class={["font-mono", Theme.text_heading()]}>{@count}</span>
       </div>
       <div class="w-full bg-zinc-200 rounded-full h-2">
         <div
@@ -184,7 +187,7 @@ defmodule WfeWeb.UIComponents do
         >
         </div>
       </div>
-      <span class="text-sm tabular-nums text-zinc-700">{format_percent_float(@rate)}</span>
+      <span class={["text-sm tabular-nums", Theme.text_body()]}>{format_percent_float(@rate)}</span>
     </div>
     """
   end
@@ -198,7 +201,7 @@ defmodule WfeWeb.UIComponents do
     ~H"""
     <.link
       navigate={@path}
-      class="inline-flex items-center gap-1 text-sm text-zinc-600 hover:text-zinc-900 mb-4"
+      class={["inline-flex items-center gap-1 text-sm mb-4", Theme.text_body(), "hover:text-zinc-900"]}
     >
       <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
@@ -214,7 +217,7 @@ defmodule WfeWeb.UIComponents do
 
   def empty_state(assigns) do
     ~H"""
-    <div class="p-8 text-center text-zinc-500">{@message}</div>
+    <div class={["p-8 text-center", Theme.text_muted()]}>{@message}</div>
     """
   end
 

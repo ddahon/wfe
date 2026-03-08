@@ -3,6 +3,7 @@ defmodule WfeWeb.JobSearchLive do
 
   alias Wfe.Jobs.Search
   alias Wfe.Companies
+  alias WfeWeb.Theme
 
   @presets [
     {"Fullstack", "fullstack"},
@@ -49,7 +50,8 @@ defmodule WfeWeb.JobSearchLive do
        age: age,
        total: total,
        total_pages: total_pages,
-       jobs_empty?: jobs == []
+       jobs_empty?: jobs == [],
+       has_filters?: query != "" or age != nil
      )
      |> stream(:jobs, jobs, reset: true)}
   end
@@ -100,18 +102,33 @@ defmodule WfeWeb.JobSearchLive do
     fn page -> self_path(query, page, age) end
   end
 
+  # ────────────────────────────────────────────────────────
+  # Render
+  # ────────────────────────────────────────────────────────
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash}>
-      <div class="max-w-4xl mx-auto p-6">
-        <h1 class="text-3xl font-bold mb-6">Job Search</h1>
+      <div class="max-w-4xl mx-auto">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
+          <h1 class={["text-2xl sm:text-3xl font-bold", Theme.text_heading()]}>Job Search</h1>
+
+          <.link
+            :if={@has_filters?}
+            patch={~p"/"}
+            class={Theme.reset_link()}
+          >
+            <.icon name="hero-x-mark" class="w-4 h-4" />
+            Clear all filters
+          </.link>
+        </div>
 
         <.search_bar query={@query} />
         <.age_filter_bar age={@age} age_filters={@age_filters} query={@query} />
         <.role_selector presets={@presets} query={@query} />
 
-        <p class="text-sm text-zinc-500 mb-4">
+        <p class={["text-sm mb-4", Theme.text_muted()]}>
           {@total} result{if @total != 1, do: "s"}
         </p>
 
@@ -129,6 +146,10 @@ defmodule WfeWeb.JobSearchLive do
     """
   end
 
+  # ────────────────────────────────────────────────────────
+  # Components
+  # ────────────────────────────────────────────────────────
+
   defp search_bar(assigns) do
     ~H"""
     <div class="mb-4">
@@ -137,15 +158,13 @@ defmodule WfeWeb.JobSearchLive do
           type="text"
           name="q"
           value={@query}
-          placeholder="Search job titles or company names..."
+          placeholder="Search job titles or companies…"
           autocomplete="off"
-          class="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400"
+          class={["flex-1 min-w-0", Theme.input()]}
         />
-        <button
-          type="submit"
-          class="rounded-lg bg-zinc-900 px-5 py-2 text-white hover:bg-zinc-700 transition-colors"
-        >
-          Search
+        <button type="submit" class={Theme.btn_primary()}>
+          <span class="hidden sm:inline">Search</span>
+          <.icon name="hero-magnifying-glass" class="w-5 h-5 sm:hidden" />
         </button>
       </form>
     </div>
@@ -155,17 +174,14 @@ defmodule WfeWeb.JobSearchLive do
   defp age_filter_bar(assigns) do
     ~H"""
     <div class="mb-4 flex flex-wrap items-center gap-2">
-      <span class="text-sm text-zinc-500">Posted within:</span>
+      <span class={["text-sm", Theme.text_muted()]}>Posted:</span>
 
       <.link
         :for={{label, days} <- @age_filters}
         patch={self_path(@query, 1, days)}
         class={[
-          "rounded-full px-3 py-1 text-sm border transition-colors",
-          if(@age == days,
-            do: "bg-zinc-900 text-white border-zinc-900",
-            else: "bg-white text-zinc-700 border-zinc-300 hover:bg-zinc-100"
-          )
+          "rounded-full px-3 py-1 text-xs sm:text-sm border transition-colors",
+          if(@age == days, do: Theme.pill_active(), else: Theme.pill_inactive())
         ]}
       >
         {label}
@@ -179,14 +195,14 @@ defmodule WfeWeb.JobSearchLive do
     <div class="mb-6">
       <form id="role-form" phx-change="preset">
         <div class="flex items-center gap-3">
-          <label for="role-select" class="text-sm text-zinc-500 whitespace-nowrap">
-            Role type:
+          <label for="role-select" class={["text-sm whitespace-nowrap", Theme.text_muted()]}>
+            Role:
           </label>
           <div class="relative">
             <select
               id="role-select"
               name="preset"
-              class="appearance-none rounded-lg border border-zinc-300 bg-white pl-4 pr-10 py-2 text-sm text-zinc-900 shadow-sm hover:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:border-zinc-400 cursor-pointer transition-colors"
+              class={Theme.select()}
               aria-label="Filter by role type"
             >
               <option value="">All roles</option>
@@ -195,7 +211,7 @@ defmodule WfeWeb.JobSearchLive do
               </option>
             </select>
             <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-              <.icon name="hero-chevron-down" class="h-4 w-4 text-zinc-500" />
+              <.icon name="hero-chevron-down" class={["h-4 w-4", Theme.text_muted()]} />
             </div>
           </div>
         </div>
@@ -206,34 +222,34 @@ defmodule WfeWeb.JobSearchLive do
 
   defp job_list(assigns) do
     ~H"""
-    <ul id="jobs" phx-update="stream" class="divide-y divide-zinc-200">
-      <li :if={@jobs_empty?} class="text-center text-zinc-500 py-12">
+    <ul id="jobs" phx-update="stream" class={["divide-y", Theme.divider()]}>
+      <li :if={@jobs_empty?} class={["text-center py-12", Theme.text_muted()]}>
         No jobs found.
       </li>
       <li :for={{id, job} <- @jobs} id={id} class="py-4">
-        <div class="flex items-start justify-between gap-4">
+        <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-4">
           <div class="min-w-0 flex-1">
             <a
               href={job.link}
               target="_blank"
               rel="noopener noreferrer"
-              class="text-lg font-semibold text-blue-600 hover:underline"
+              class={["text-base sm:text-lg font-semibold hover:underline", Theme.text_link()]}
             >
               {job.title}
             </a>
-            <div class="mt-1 text-sm text-zinc-600">
+            <div class={["mt-1 text-sm", Theme.text_body()]}>
               <button
                 type="button"
                 phx-click="show_company"
                 phx-value-id={job.company_id}
-                class="font-medium text-zinc-900 hover:underline"
+                class={["font-medium hover:underline", Theme.text_heading()]}
               >
                 {job.company.name}
               </button>
               <span :if={job.location} class="ml-2">• {job.location}</span>
             </div>
           </div>
-          <div :if={job.posted_at} class="text-xs text-zinc-400 whitespace-nowrap">
+          <div :if={job.posted_at} class={["text-xs whitespace-nowrap", Theme.text_faint()]}>
             {Calendar.strftime(job.posted_at, "%b %d, %Y")}
           </div>
         </div>
@@ -244,20 +260,20 @@ defmodule WfeWeb.JobSearchLive do
 
   defp company_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div class={["fixed inset-0 z-50 flex items-center justify-center p-4", Theme.modal_overlay()]}>
       <div
         id="company-modal"
-        class="w-full max-w-md rounded-lg bg-white p-6 shadow-xl"
+        class={["w-full max-w-md rounded-lg p-6 shadow-xl", Theme.modal_surface()]}
         phx-click-away="close_company"
         phx-window-keydown="close_company"
         phx-key="Escape"
       >
         <div class="flex items-start justify-between mb-4">
-          <h2 class="text-xl font-bold text-zinc-900">{@company.name}</h2>
+          <h2 class={["text-xl font-bold", Theme.text_heading()]}>{@company.name}</h2>
           <button
             type="button"
             phx-click="close_company"
-            class="text-zinc-400 hover:text-zinc-600"
+            class={Theme.btn_ghost()}
             aria-label="Close"
           >
             <.icon name="hero-x-mark" class="w-5 h-5" />
@@ -266,22 +282,22 @@ defmodule WfeWeb.JobSearchLive do
 
         <dl class="space-y-2 text-sm">
           <div :if={@company.ats}>
-            <dt class="font-medium text-zinc-500">ATS</dt>
-            <dd class="text-zinc-900">{@company.ats}</dd>
+            <dt class={["font-medium", Theme.text_muted()]}>ATS</dt>
+            <dd class={Theme.text_heading()}>{@company.ats}</dd>
           </div>
           <div :if={@company.ats_identifier}>
-            <dt class="font-medium text-zinc-500">Identifier</dt>
-            <dd class="text-zinc-900">{@company.ats_identifier}</dd>
+            <dt class={["font-medium", Theme.text_muted()]}>Identifier</dt>
+            <dd class={Theme.text_heading()}>{@company.ats_identifier}</dd>
           </div>
           <div :if={@company.last_scraped_at}>
-            <dt class="font-medium text-zinc-500">Last Scraped</dt>
-            <dd class="text-zinc-900">
+            <dt class={["font-medium", Theme.text_muted()]}>Last Scraped</dt>
+            <dd class={Theme.text_heading()}>
               {Calendar.strftime(@company.last_scraped_at, "%b %d, %Y at %H:%M UTC")}
             </dd>
           </div>
           <div :if={@company.last_scrape_error}>
-            <dt class="font-medium text-zinc-500">Last Error</dt>
-            <dd class="text-red-600 break-words">{@company.last_scrape_error}</dd>
+            <dt class={["font-medium", Theme.text_muted()]}>Last Error</dt>
+            <dd class={["break-words", Theme.text_error()]}>{@company.last_scrape_error}</dd>
           </div>
         </dl>
       </div>
