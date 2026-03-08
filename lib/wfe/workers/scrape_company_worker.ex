@@ -27,10 +27,18 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
 
     Logger.info("[Scraper] #{company.name} (#{company.ats}) — attempt #{attempt}/#{max}")
 
-    case Scrapers.fetch_jobs(company) do
+    result = Scrapers.fetch_jobs(company)
+
+    # Stamp last_scraped_at regardless of outcome. The orchestrator selects
+    # on this column; if we only stamped on success, a company that
+    # consistently 404s or errors would be picked up on every single run.
+    # Error details are persisted separately by the telemetry handler.
+    Companies.touch_last_scraped(company)
+
+    case result do
       {:ok, jobs} ->
         {count, _} = Jobs.upsert_jobs(company, jobs)
-        Companies.touch_last_scraped(company)
+        Companies.mark_scrape_succeeded(company)
         Logger.info("[Scraper] #{company.name}: upserted #{count} jobs")
         :ok
 
@@ -46,8 +54,6 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
     end
   end
 
-  # Shapes `Scrapers.fetch_jobs/1` might return for a missing board.
-  # Keep this in sync with whatever your HTTP layer actually emits.
   defp not_found?(:not_found), do: true
   defp not_found?({:http_error, 404}), do: true
   defp not_found?({:http_error, 404, _}), do: true

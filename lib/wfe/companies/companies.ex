@@ -6,19 +6,16 @@ defmodule Wfe.Companies do
   @valid_ats Company.valid_ats()
 
   def get_company!(id), do: Repo.get!(Company, id)
-
-  @doc "Non-bang variant; telemetry handlers must not crash."
   def get_company(id), do: Repo.get(Company, id)
 
   @doc """
   Companies due for a scrape.
 
-  No longer filters by scrape_status — Oban's unique constraint
-  already prevents duplicate in-flight jobs. Select purely on staleness.
-
-  Options:
-    * `:threshold_hours` — consider companies due if last scraped more than
-      this many hours ago (default 6). Use 0 to include all companies.
+  Ordered by `last_scraped_at NULLS FIRST` so the stalest companies get
+  queued first, and — critically — so ATSes are *interleaved* rather than
+  inserted in contiguous blocks. This means all Oban queues receive work
+  roughly simultaneously instead of one queue filling up before the next
+  starts.
   """
   def list_scrape_candidates(opts \\ []) do
     hours = Keyword.get(opts, :threshold_hours, 6)
@@ -27,17 +24,27 @@ defmodule Wfe.Companies do
     Company
     |> where([c], c.ats in @valid_ats and not is_nil(c.ats_identifier))
     |> where([c], is_nil(c.last_scraped_at) or c.last_scraped_at < ^threshold)
+    |> order_by([c], asc_nulls_first: c.last_scraped_at)
     |> Repo.all()
   end
 
-  @doc "Record a successful scrape: stamp time, clear any prior error."
+  @doc """
+  Stamp `last_scraped_at` unconditionally.
+
+  Called on *every* scrape attempt regardless of outcome, so
+  `list_scrape_candidates/1` doesn't re-select a company that just ran.
+  Does NOT touch `last_scrape_error` — that's the job of
+  `mark_scrape_succeeded/1` and `mark_scrape_failed/2`.
+  """
   def touch_last_scraped(%Company{} = company) do
-    company
-    |> Ecto.Changeset.change(
-      last_scraped_at: DateTime.utc_now() |> DateTime.truncate(:second),
-      last_scrape_error: nil
-    )
-    |> Repo.update()
+    update_company(company, %{
+      last_scraped_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+  end
+
+  @doc "Clear any prior error. Call after a successful scrape."
+  def mark_scrape_succeeded(%Company{} = company) do
+    update_company(company, %{last_scrape_error: nil})
   end
 
   @doc "Record final failure after all retries (called from telemetry handler)."
@@ -51,14 +58,8 @@ defmodule Wfe.Companies do
     company |> Ecto.Changeset.change(attrs) |> Repo.update()
   end
 
-  @doc """
-  Finds an existing company by ATS and identifier, or creates a new one.
+  # ───────────────────────── find / create ─────────────────────────
 
-  Returns:
-    - `{:ok, :created, company}` if a new company was created
-    - `{:ok, :exists, company}` if the company already exists
-    - `{:error, changeset}` if creation failed
-  """
   def find_or_create_company(ats, ats_identifier) do
     case get_by_ats(ats, ats_identifier) do
       nil ->
@@ -74,28 +75,16 @@ defmodule Wfe.Companies do
     end
   end
 
-  @doc """
-  Get a company by its ATS and identifier.
-  """
   def get_by_ats(ats, ats_identifier) do
     Company
     |> where([c], c.ats == ^ats and c.ats_identifier == ^ats_identifier)
     |> Repo.one()
   end
 
-  @doc """
-  Create a new company.
-  """
   def create_company(attrs) do
-    %Company{}
-    |> Company.changeset(attrs)
-    |> Repo.insert()
+    %Company{} |> Company.changeset(attrs) |> Repo.insert()
   end
 
-  @doc """
-  Upsert a company - create if not exists, otherwise return existing.
-  Uses a database-level constraint for race condition safety.
-  """
   def upsert_company(attrs) do
     %Company{}
     |> Company.changeset(attrs)
@@ -106,12 +95,10 @@ defmodule Wfe.Companies do
     )
   end
 
-  # Converts "acme-corp" to "Acme Corp"
   defp humanize_identifier(identifier) do
     identifier
     |> String.replace(~r/[-_]+/, " ")
     |> String.split()
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 end
