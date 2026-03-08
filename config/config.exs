@@ -15,7 +15,8 @@ config :wfe, :generators, binary_id: true
 
 config :wfe, Wfe.Repo,
   migration_primary_key: [type: :binary_id],
-  migration_foreign_key: [type: :binary_id]
+  migration_foreign_key: [type: :binary_id],
+  log: false
 
 # Configure the endpoint
 config :wfe, WfeWeb.Endpoint,
@@ -43,12 +44,22 @@ config :wfe, :companies_finder,
   # Don't run on application start (set to true for production)
   run_on_start: false
 
-# Per-ATS queues (concurrency 1 = serial calls per ATS = rate limiter).
+# Per-ATS queues (concurrency 2 = up to 2 concurrent calls per ATS).
 # Must match Company.valid_ats/0; ConfigCheck.validate!() at boot catches mismatches.
 ats_queues = [
-  greenhouse: 1, lever: 1, ashby: 1, workable: 1, recruitee: 1,
-  teamtailor: 1, smartrecruiters: 1, rippling: 1, pinpoint: 1,
-  jobvite: 1, dover: 1, breezy: 1, bamboohr: 1
+  greenhouse: 2,
+  lever: 2,
+  ashby: 2,
+  workable: 2,
+  recruitee: 2,
+  teamtailor: 2,
+  smartrecruiters: 2,
+  rippling: 2,
+  pinpoint: 2,
+  jobvite: 2,
+  dover: 2,
+  breezy: 2,
+  bamboohr: 2
 ]
 
 config :wfe, Oban,

@@ -2,7 +2,7 @@ defmodule Wfe.Workers.ScrapeCompanyWorker do
   @moduledoc """
   Scrapes a single company.
 
-  Runs in an ATS-specific queue (concurrency 1 → serial calls per ATS).
+  Runs in an ATS-specific queue (concurrency 2 → up to 2 concurrent calls per ATS).
   Cross-cutting concerns — circuit breaker, final-failure persistence —
   are handled by Wfe.Workers.ScrapeTelemetry.
   """
