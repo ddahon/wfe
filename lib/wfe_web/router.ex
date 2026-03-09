@@ -38,7 +38,10 @@ defmodule WfeWeb.Router do
     scope "/admin", WfeWeb do
       pipe_through :browser
 
+      # Redirect bare /admin/scraping to the filters page
       live "/scraping", ScrapingDashboardLive, :index
+      live "/scraping/filters", ScrapingDashboardLive, :index
+      live "/scraping/errors", ScrapingErrorsLive, :index
       live "/scraping/run/:run_id", ScrapingDashboardLive, :run_detail
       live "/scraping/company/:company_id", ScrapingDashboardLive, :company_detail
     end
