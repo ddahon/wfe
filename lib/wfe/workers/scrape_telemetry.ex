@@ -10,6 +10,7 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   alias Wfe.Companies
   alias Wfe.Scrapers.CircuitBreaker
+  alias Wfe.Scrapers.ErrorReason
 
   require Logger
 
@@ -20,7 +21,7 @@ defmodule Wfe.Workers.ScrapeTelemetry do
     :telemetry.attach_many("wfe-scrape", @events, &__MODULE__.handle_event/4, nil)
   end
 
-  # --- Event router --------------------------------------------------------
+  # ── Event router ─────────────────────────────────────────────────────
 
   def handle_event([:oban, :job, :stop], _m, %{worker: @worker, state: :success} = meta, _) do
     handle_success(meta)
@@ -36,14 +37,13 @@ defmodule Wfe.Workers.ScrapeTelemetry do
 
   def handle_event(_event, _meas, _meta, _cfg), do: :ok
 
-  # --- Handlers ------------------------------------------------------------
+  # ── Handlers ─────────────────────────────────────────────────────────
 
   defp handle_success(%{queue: queue}) do
     CircuitBreaker.record_success(queue)
   end
 
   defp handle_failure(%{queue: queue, attempt: attempt, max_attempts: max} = meta) do
-    reason = raw_reason(meta)
     discarded? = Map.get(meta, :state) == :discard
 
     if discarded? do
@@ -52,13 +52,13 @@ defmodule Wfe.Workers.ScrapeTelemetry do
       CircuitBreaker.record_failure(queue)
     end
 
-    # Persist when retries are exhausted OR the worker gave up early.
     if discarded? or attempt >= max do
-      persist_failure(meta, format_reason(reason))
+      reason = meta |> raw_reason() |> ErrorReason.normalize()
+      persist_failure(meta, reason)
     end
   end
 
-  # --- Helpers -------------------------------------------------------------
+  # ── Helpers ───────────────────────────────────────────────────────────
 
   defp persist_failure(%{args: %{"company_id" => id}}, reason) do
     case Companies.get_company(id) do
@@ -66,7 +66,7 @@ defmodule Wfe.Workers.ScrapeTelemetry do
         :ok
 
       company ->
-        Logger.warning("[Scraper] #{company.name}: discarded — #{reason}")
+        Logger.warning("[Scraper] #{company.name}: failed — #{reason}")
         Companies.mark_scrape_failed(company, reason)
     end
   end
@@ -78,7 +78,4 @@ defmodule Wfe.Workers.ScrapeTelemetry do
   defp raw_reason(%{error: reason}), do: reason
   defp raw_reason(%{reason: reason}), do: reason
   defp raw_reason(_), do: :unknown
-
-  defp format_reason(r) when is_binary(r), do: r
-  defp format_reason(r), do: inspect(r)
 end

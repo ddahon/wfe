@@ -15,14 +15,17 @@ defmodule Wfe.Scrapers.Ashby do
       {:ok, %{status: status, body: body}} ->
         {:error, {:http_error, status, body}}
 
+      {:error, %Req.TransportError{} = err} ->
+        {:error, err}
+
       {:error, reason} ->
         {:error, reason}
     end
   end
 
   @impl true
-  # Ashby has an explicit boolean — trust it.
-  # TODO: wtf is this?
+  # Ashby's `isRemote` is a reliable first-party signal — trust it
+  # directly without running heuristics.
   def remote_hint(%{"isRemote" => true}), do: true
   def remote_hint(%{"isRemote" => false}), do: false
   def remote_hint(_), do: nil
