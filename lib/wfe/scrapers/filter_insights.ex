@@ -315,7 +315,7 @@ defmodule Wfe.Scrapers.FilterInsights do
 
     query =
       from c in Company,
-        where: not is_nil(c.last_scrape_error),
+        where: not is_nil(c.last_scrape_error) and c.last_scrape_error != "",
         group_by: c.last_scrape_error,
         select: %{
           error: c.last_scrape_error,
@@ -323,46 +323,124 @@ defmodule Wfe.Scrapers.FilterInsights do
         },
         order_by: [desc: count(c.id)]
 
-    query =
-      if since do
-        from c in query, where: c.updated_at >= ^since
-      else
-        query
-      end
-
-    query =
-      if ats && ats != "" do
-        from c in query, where: c.ats == ^ats
-      else
-        query
-      end
+    query = if since, do: from(c in query, where: c.updated_at >= ^since), else: query
+    query = if ats && ats != "", do: from(c in query, where: c.ats == ^ats), else: query
 
     Repo.all(query)
   end
 
-  def total_failed_count(opts \\ []) do
+  def scrape_status_summary(opts \\ []) do
     since = Keyword.get(opts, :since)
     ats = Keyword.get(opts, :ats)
 
     query =
       from c in Company,
-        where: not is_nil(c.last_scrape_error),
-        select: count(c.id)
+        where: not is_nil(c.last_scraped_at) or not is_nil(c.last_scrape_error),
+        select: %{
+          success:
+            fragment(
+              "SUM(CASE WHEN ? IS NOT NULL AND ? IS NULL THEN 1 ELSE 0 END)",
+              c.last_scraped_at,
+              c.last_scrape_error
+            ),
+          failed:
+            fragment(
+              "SUM(CASE WHEN ? IS NOT NULL THEN 1 ELSE 0 END)",
+              c.last_scrape_error
+            ),
+          pending:
+            fragment(
+              "SUM(CASE WHEN ? IS NULL AND ? IS NULL THEN 1 ELSE 0 END)",
+              c.last_scraped_at,
+              c.last_scrape_error
+            )
+        }
+
+    query = if since, do: from(c in query, where: c.updated_at >= ^since), else: query
+    query = if ats && ats != "", do: from(c in query, where: c.ats == ^ats), else: query
+
+    case Repo.one(query) do
+      nil ->
+        %{success: 0, failed: 0, pending: 0}
+
+      result ->
+        %{
+          success: result.success || 0,
+          failed: result.failed || 0,
+          pending: result.pending || 0
+        }
+    end
+  end
+
+
+  @doc """
+  Returns paginated list of companies with a specific error.
+  """
+  def companies_with_error(error, opts \\ []) do
+    page = Keyword.get(opts, :page, 1)
+    since = Keyword.get(opts, :since)
+    ats = Keyword.get(opts, :ats)
 
     query =
-      if since do
-        from c in query, where: c.updated_at >= ^since
-      else
-        query
-      end
+      from c in Company,
+        where: c.last_scrape_error == ^error,
+        order_by: [desc: c.updated_at],
+        select: %{
+          id: c.id,
+          name: c.name,
+          ats: c.ats,
+          ats_identifier: c.ats_identifier,
+          last_scraped_at: c.last_scraped_at,
+          updated_at: c.updated_at
+        }
+
+    query = if since, do: from(c in query, where: c.updated_at >= ^since), else: query
+    query = if ats && ats != "", do: from(c in query, where: c.ats == ^ats), else: query
+
+    total = Repo.aggregate(query, :count) || 0
+
+    companies =
+      query
+      |> limit(^@page_size)
+      |> offset(^(@page_size * (page - 1)))
+      |> Repo.all()
+
+    {companies, total}
+  end
+
+  @doc """
+  Returns paginated list of successfully scraped companies.
+  """
+  def successful_companies(opts \\ []) do
+    page = Keyword.get(opts, :page, 1)
+    since = Keyword.get(opts, :since)
+    ats = Keyword.get(opts, :ats)
 
     query =
-      if ats && ats != "" do
-        from c in query, where: c.ats == ^ats
-      else
-        query
-      end
+      from c in Company,
+        where:
+          not is_nil(c.last_scraped_at) and
+            (is_nil(c.last_scrape_error) or c.last_scrape_error == ""),
+        order_by: [desc: c.last_scraped_at],
+        select: %{
+          id: c.id,
+          name: c.name,
+          ats: c.ats,
+          ats_identifier: c.ats_identifier,
+          last_scraped_at: c.last_scraped_at
+        }
 
-    Repo.one(query) || 0
+    query = if since, do: from(c in query, where: c.updated_at >= ^since), else: query
+    query = if ats && ats != "", do: from(c in query, where: c.ats == ^ats), else: query
+
+    total = Repo.aggregate(query, :count) || 0
+
+    companies =
+      query
+      |> limit(^@page_size)
+      |> offset(^(@page_size * (page - 1)))
+      |> Repo.all()
+
+    {companies, total}
   end
 end

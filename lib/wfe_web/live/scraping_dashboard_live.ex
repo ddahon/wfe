@@ -186,7 +186,10 @@ defmodule WfeWeb.ScrapingDashboardLive do
         on_timeout: :kill_task
       )
       |> Enum.zip(Keyword.keys(tasks))
-      |> Map.new(fn {{:ok, result}, key} -> {key, result} end)
+      |> Map.new(fn
+        {{:ok, result}, key} -> {key, result}
+        {{:exit, :timeout}, key} -> {key, default_for(key)}
+      end)
 
     {runs, runs_total} = results.recent_runs
 
@@ -203,6 +206,14 @@ defmodule WfeWeb.ScrapingDashboardLive do
   end
 
   # ── Helpers ────────────────────────────────────────────────────────────
+
+  defp default_for(:summary), do: %{}
+  defp default_for(:totals), do: %{}
+  defp default_for(:pass_rate), do: 0.0
+  defp default_for(:by_company), do: []
+  defp default_for(:by_ats), do: []
+  defp default_for(:recent_runs), do: {[], 0}
+  defp default_for(_), do: nil
 
   defp build_filter_opts(ats, range) do
     opts = []
